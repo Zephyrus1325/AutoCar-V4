@@ -1,9 +1,11 @@
 #include "comms/udp_task.h"
 #include "common/configs.h"
 
-#include "comms/networker.h"
+
 #include "comms/network_common.h"
 #include "comms/network_config.h"
+
+#include "comms/network_task.h"
 
 TaskHandle_t tcp_task_handler;
 

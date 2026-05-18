@@ -5,12 +5,14 @@
 // Core usages
 constexpr int NETWORK_CORE = 1;
 constexpr int LIDAR_CORE = 1;
+constexpr int CHUNK_CORE = 1;
 
 // Stack sizes
 constexpr int NETWORK_STACK_SIZE = 8192;
 constexpr int UDP_TRANSMIT_STACK_SIZE = 8192;
 constexpr int TCP_TRANSMIT_STACK_SIZE = 8192;
 constexpr int LIDAR_STACK_SIZE = 4096;
+constexpr int CHUNK_STACK_SIZE = 8192;
 
 // Navigation
 // Chunk
