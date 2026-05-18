@@ -26,13 +26,14 @@ void Lidar::begin(HardwareSerial* S, int motor_pin){
     _motor_pin = motor_pin;
     _activeId = 0;
     _readId = 0;
-    _throttle = 180;
+    _throttle = 420;
     setRPM(300);
 
     serial = S;
     serial->begin(115200);
     pinMode(_motor_pin, OUTPUT);
     analogWriteFrequency(25000);    // Sets a high frequency so theres no audible high pitch noise
+    analogWriteResolution(10);
     analogWrite(_motor_pin, _throttle);   // Starts to spin the lidar at a initial speed
 
     for(int i = 0; i < sizeof(_internalReading)/sizeof(_internalReading[0]); i++){
@@ -77,13 +78,13 @@ void Lidar::update(){
 void Lidar::_updateThrottle(){
     if(_mode == MODE_RPM){
         if(this->read().rpm() > _target + 3){
-            _throttle--;
+            _throttle -= 1;
         } else if(this->read().rpm() < _target - 3){
-            _throttle++;
+            _throttle += 1;
         }
     }
         
-    _throttle = constrain(_throttle, 0, 255);
+    _throttle = constrain(_throttle, 0, 1024);
     analogWrite(_motor_pin, _throttle);
 }
 

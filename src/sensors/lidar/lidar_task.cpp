@@ -30,6 +30,6 @@ void lidar_task(void* param){
 
             last_id = data.id();    // Stores new last id
         }
-        delay(10);         // Lidar is quite slow, so we can check for new data with slower frequency
+        delay(2);         // Lidar is quite slow, so we can check for new data with slower frequency
     }
 }

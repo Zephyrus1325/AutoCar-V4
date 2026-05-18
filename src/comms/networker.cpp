@@ -37,36 +37,32 @@ void network_task(void* param){
     // Setup Initial WiFi Status
     // Tries to connect to saved ssid
     // If it fails, enters STA mode
-    
 
     set_sta();
     if(WiFi.status() != WL_CONNECTED){
         set_ap();
+        Serial.println("Couldn't connect to WiFi, backing up with Access Point.");
     }
+
+    WiFi.setSleep(false); // Disables power saving completely
 
     // Starts the other networking tasks
 
     xTaskCreatePinnedToCore(tcp_task, "TCP Networking Task", UDP_TRANSMIT_STACK_SIZE, NULL, 1, &tcp_task_handler, NETWORK_CORE);
     xTaskCreatePinnedToCore(udp_task, "UDP Networking Task", TCP_TRANSMIT_STACK_SIZE, NULL, 1, &udp_task_handler, NETWORK_CORE);
-    
+
     // Keeps checking for a the connection
     while(true){
-
-        ulTaskNotifyTake(true, portMAX_DELAY);  // Wait until the TCP connection
-
-        while(remote != NULL && WiFi.status() == WL_CONNECTED){  //send pings while connected
-            remote->write("Ping");
-            vTaskDelay(NETWORK_PING_WAIT);
-        }
-
-        // If it loses connection with WiFi, stops others tasks, and tries to reconnect
-        uint32_t reconnect_tries = 0;
-        while(WiFi.status() != WL_CONNECTED && reconnect_tries < MAX_RECONNECT_TRIES){
-            WiFi.disconnect();
-            WiFi.reconnect();
-            reconnect_tries++;
-            vTaskDelay(1000);
-        }   // If it takes too much time, give up and wait for a new connection
+        vTaskDelay(portMAX_DELAY); // Stops the task, for now
+        
+        //// If it loses connection with WiFi, stops others tasks, and tries to reconnect
+        //uint32_t reconnect_tries = 0;
+        //while(WiFi.status() != WL_CONNECTED && reconnect_tries < MAX_RECONNECT_TRIES){
+        //    WiFi.disconnect();
+        //    WiFi.reconnect();
+        //    reconnect_tries++;
+        //    vTaskDelay(1000);
+        //}   // If it takes too much time, give up and wait for a new connection
         
         
     } // Infinite Loop

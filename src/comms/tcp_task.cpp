@@ -44,15 +44,18 @@ typedef struct {
 
 #include "sensors/lidar/lidar_task.h"
 
-void parse_packet(void* packet, size_t len){
+void parse_packet(void* packet, size_t len, AsyncClient* client){
     uint8_t* ptr = (uint8_t*) packet;
     size_t offset = 0;
 
+    //Serial.println("Address: " + client->getRemoteAddress());
     
     while(offset < len){
         tcp_header_t* header = (tcp_header_t*)(ptr + offset);
-    
-        if(header->type == command){
+        
+        //Serial.println("Header: " + header->type);
+
+        if(header->type == UDP_PACKET_COMMAND){
             switch(header->data[0]){
                 case 'q':
                     lidar.setRPM(lidar.getSetPoint() - 3);
@@ -61,7 +64,7 @@ void parse_packet(void* packet, size_t len){
                     lidar.setRPM(lidar.getSetPoint() + 3);
                     break;
                 case honk:
-                    Serial.println("Honk");
+                    //Serial.println("Honk");
                     break;
                 case setIMULowPassFilter:        // uint8_t (0-6)
                     break;
@@ -107,12 +110,12 @@ void tcp_task(void* param){
         remote = c;
         xTaskNotifyGive(network_handler);   // Notify connection success so Networker starts looking its health
 
-        Serial.println("Client from " + c->localIP().toString());
+        Serial.println("Client from " + c->remoteIP().toString());
 
         // Callback para quando chegarem dados do Processing
         remote->onData([](void *arg, AsyncClient *c, void *data, size_t len) {
             // Notifique sua task de controle aqui se necessário
-            parse_packet(data, len);
+            parse_packet(data, len, c);
         }, NULL);
 
         // Callback para desconexão
@@ -128,6 +131,7 @@ void tcp_task(void* param){
     while(true){
         
         // Waits for main networking to give a ip
+
 
         yield();
     }
