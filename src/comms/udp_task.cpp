@@ -35,14 +35,16 @@ typedef struct {
 typedef struct {
     int16_t leftSpeed;      // Times 10
     int16_t leftSetpoint;   // Times 10
-    int16_t leftThrottle;   // -255 to 255
+    int16_t leftThrottle;   // -1000 to 1000 (-1.000 to 1.000)
 
     int16_t rightSpeed;      // Times 10
     int16_t rightSetpoint;   // Times 10
-    int16_t rightThrottle;   // -255 to 255
+    int16_t rightThrottle;   // -1000 to 1000 (-1.000 to 1.000)
 } __attribute__((packed)) motor_data_t;
 
-
+void sendMotorInfo(){
+    
+}
 
 void sendLidarData(){
     static uint32_t last_id = 0;

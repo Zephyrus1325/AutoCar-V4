@@ -6,7 +6,7 @@
 #include "comms/tcp_task.h"
 #include "comms/network_common.h"
 
-char sta_ssid[32] = "Marco_2G";             // 
+char sta_ssid[32] = "MarcoFilho";           // 
 char sta_password[32] = "MarcoFilho12";     // TODO: GET THAT INFO FROM THE SD CARD WHEN THE MEMORY TASK GETS DONE
 char ap_ssid[32] = "AutoCar_V4";            // 
 char ap_password[32] = "VroomVroom";        // 

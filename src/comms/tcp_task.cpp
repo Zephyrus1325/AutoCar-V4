@@ -45,6 +45,7 @@ typedef struct {
 } __attribute__((packed)) motor_param_t;
 
 #include "sensors/lidar/lidar_task.h"
+#include "navigation/motors/motor_task.h"
 
 void parse_packet(void* packet, size_t len, AsyncClient* client){
     uint8_t* ptr = (uint8_t*) packet;
@@ -60,10 +61,31 @@ void parse_packet(void* packet, size_t len, AsyncClient* client){
         if(header->type == UDP_PACKET_COMMAND){
             switch(header->data[0]){
                 case 'q':
-                    lidar.setRPM(lidar.getSetPoint() - 3);
+                    motor.setRPM(20);
+                    break;
+                case 'w':
+                    motor.setRPM(40);
                     break;
                 case 'e':
-                    lidar.setRPM(lidar.getSetPoint() + 3);
+                    motor.setRPM(60);
+                    break;
+                case 'r':
+                    motor.setRPM(80);
+                    break;
+                case 't':
+                    motor.setRPM(100);
+                    break;
+                case 'y':
+                    motor.setRPM(110);
+                    break;
+                case 'u':
+                    motor.setRPM(120);
+                    break;
+                case 'i':
+                    motor.setRPM(130);
+                    break;
+                case 'z':
+                    motor.setRPM(0);
                     break;
                 case honk:
                     //Serial.println("Honk");
