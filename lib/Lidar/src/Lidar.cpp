@@ -9,7 +9,7 @@ void Lidar::setRPM(uint16_t RPM){
     _mode = MODE_RPM;
 }
 
-void Lidar::setMotor(uint8_t throttle){
+void Lidar::setMotor(uint16_t throttle){
     _target = throttle;
     _mode = MODE_THROTTLE;
 }

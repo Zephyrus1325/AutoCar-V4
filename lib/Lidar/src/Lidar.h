@@ -41,7 +41,7 @@ class Lidar {
     void update();
     
     void setRPM(uint16_t RPM);
-    void setMotor(uint8_t throttle);
+    void setMotor(uint16_t throttle);
     void setDataRate(uint8_t data_rate);
     uint16_t getSetPoint();
 

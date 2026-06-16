@@ -24,15 +24,13 @@ void Motor::begin(){
 }
 
 void Motor::update(){
-    static uint32_t last_update = 0;
-    static float integral = 0;
-    static float last_rpm = 0;
-
     float act_rpm = getRPM();
-    
+    uint64_t act_time = millis();
+
+    if (act_time == last_update) return;    // deltaTime == 0 protection
     const float max_integral = 1000;
 
-    float deltaTime = float(millis() - last_update)/1000.f;
+    float deltaTime = float(act_time - last_update)/1000.f;
     float error = setpoint_ - act_rpm;
 
     float p_out = kp_ * error;
@@ -43,8 +41,9 @@ void Motor::update(){
 
     float d_out = kd_ * ((act_rpm - last_rpm)/deltaTime);
     float out = constrain(p_out + i_out + d_out, -1.f, 1.f);
-
-    last_update = millis();
+    
+    last_rpm = act_rpm;
+    last_update = act_time;
     setThrottle(out);
 }
 
@@ -60,6 +59,8 @@ void Motor::setPID(float kp, float ki, float kd){
 
 // -1 to 1 
 void Motor::setThrottle(float throttle){
+    throttle = constrain(throttle, -1.0f, 1.0f);
+
     if(throttle < 0){
         digitalWrite(this->pin_a_, HIGH);
         digitalWrite(this->pin_b_, LOW);
@@ -105,8 +106,7 @@ float Motor::getRPM(){
     
     avg_delta = avg_delta / MOTOR_FILTER_SIZE;
 
-
-    if(avg_delta >= 890 && micros() - lastTime_ < 150000){
+    if(avg_delta >= 890 && micros() - lastTime_ < 100000){
         return (130000.f/float(avg_delta)) * avg_dir;
     } else {
         return 0.f;

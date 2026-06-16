@@ -1,5 +1,7 @@
 #include "sensors/lidar/lidar_task.h"
 #include "common/configs.h"
+#include "util/file_read.h"
+#include "util/logger.h"
 
 #include "Lidar.h"
 
@@ -12,7 +14,14 @@ void lidar_task(void* param){
     LidarData data;
     uint32_t last_id = 0;
 
-    lidar.setRPM(280);
+    JsonDocument config = getConfigData();
+
+    uint16_t rpm = config["lidar"]["rpm"];
+
+    lidar.setMotor(500);
+    delay(1000);
+    lidar.setRPM(rpm);
+    
 
     while(true){
         lidar.update();         // check if there are readings

@@ -34,6 +34,11 @@ class Motor{
     float kp_, ki_, kd_;
 
     volatile uint32_t lastTime_;
+    
+    uint32_t last_update = 0;
+    float integral = 0;
+    float last_rpm = 0;
+
 
     #define MOTOR_FILTER_SIZE 50
     volatile uint32_t delta_index = 0;

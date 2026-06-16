@@ -1,0 +1,83 @@
+{
+    "wifi": {
+        "ssid": "MarcoFilho",
+        "password": "MarcoFilho12"
+    },
+
+    "ap": {
+        "ssid": "AutoCarV4",
+        "password": "VroomVroom"
+    },
+
+    "motor": {
+        "left": {
+            "kp": 0.01,
+            "ki": 0.09,
+            "kd": 0.00
+        },
+
+        "right": {
+            "kp": 0.01,
+            "ki": 0.09,
+            "kd": 0.00
+        }
+    },
+
+    "lidar": {
+        "rpm": 300
+    },
+
+    "imu": {
+      "gyro": {
+        "calibration": {
+            "offset": {
+                "x": 0,
+                "y": 0,
+                "z": 0
+            }
+        },
+
+        "config": {
+            "sample_rate": 10
+        }
+      },  
+
+      "accel": {
+        "calibration": {
+            "offset": {
+                "x": 0,
+                "y": 0,
+                "z": 0
+            }
+        },
+
+        "config": {
+            "sample_rate": 10
+        }
+      },
+
+      "mag": {
+        "calibration": {
+            "offset": {
+                "x": 0,
+                "y": 0,
+                "z": 0
+            },
+
+            "scale": {
+                "x": 0,
+                "y": 0,
+                "z": 0
+            }
+        },
+
+        "config": {
+            "sample_rate": 10
+        }
+      },
+
+      "config": {
+            "low_pass_freq": 0
+        }
+    }
+}

@@ -3,9 +3,6 @@
 
 #include <Arduino.h>
 
-QueueHandle_t telemetry_queue;
-QueueHandle_t chunk_queue;
-
-
+// No queue for now...
 
 #endif // QUEUES_H

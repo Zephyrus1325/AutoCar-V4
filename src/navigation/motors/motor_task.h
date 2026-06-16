@@ -4,7 +4,8 @@
 #include <Arduino.h>
 #include "Motor.h"
 
-extern Motor motor;
+extern Motor left_motor;
+extern Motor right_motor;
 extern TaskHandle_t motor_task_handler;
 void motor_task(void* param);
 

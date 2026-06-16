@@ -12,6 +12,7 @@ void generateChunk(chunk_t* c, int16_t x, int16_t y, uint16_t size, uint16_t pre
     c->y = y;
     c->size = size;
     c->precision = precision;
+    c->map_id = 0;      // Well, try to get a way to set this correctlyl0
     c->data = (uint8_t*) malloc(size * size);    // Allocate the memory for that chunk
 
     // Clear chunk values
