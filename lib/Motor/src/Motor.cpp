@@ -49,6 +49,9 @@ void Motor::update(){
 
 void Motor::setRPM(float rpm){
     this->setpoint_ = rpm;
+    if(rpm == 0.f){
+        integral = 0;
+    }
 }
 
 void Motor::setPID(float kp, float ki, float kd){

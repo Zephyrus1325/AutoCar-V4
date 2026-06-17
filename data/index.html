@@ -200,6 +200,44 @@
     </div>
 
 <script>
+// Dados do robô
+
+// Dados do robô
+let robot_x = 0.0;
+let robot_y = 0.0;
+let robot_heading = 0.0;
+
+// ESCALA: 1 mm real = 0.1 pixels na tela (10mm = 1px)
+const PIXELS_POR_MM = 0.1; 
+const TAMANHO_GRID_MM = 40; // Quadrados de 40x40 mm
+
+// Armazena os pontos históricos do Lidar no mapa global [{x, y}, {x, y}, ...]
+let pontosLidarGlobal = [];
+// Banco de dados dos quadrados do mapa. Chave: "X_Y", Valor: byte de 0 a 255
+let mapaGradeGlobal = {};
+
+
+function obterCorOcupacao(valor) {
+    // 0 = Livre (Verde), 127 = Desconhecido (Cinza Escuro), 255 = Parede (Vermelho Vivo)
+    if (valor === 127) {
+        return "rgba(40, 40, 45, 0.3)"; // Transparente/Cinza para o desconhecido
+    } else if (valor < 127) {
+        // Interpola de Verde (0) até o Cinza (127)
+        let pct = valor / 127;
+        let r = Math.round(40 + (pct * 0));
+        let g = Math.round(180 - (pct * 140));
+        let b = Math.round(40 + (pct * 5));
+        return `rgba(${r}, ${g}, ${b}, 0.8)`;
+    } else {
+        // Interpola de Cinza (127) até Vermelho/Preto (255)
+        let pct = (valor - 127) / 128;
+        let r = Math.round(40 + (pct * 215));
+        let g = Math.round(40 - (pct * 20));
+        let b = Math.round(45 - (pct * 25));
+        return `rgba(${r}, ${g}, ${b}, 0.9)`;
+    }
+}
+
 /* ========================================================================
    1. GERENCIAMENTO DO MAPA (HTML5 CANVAS COM PAN/ZOOM)
    ======================================================================== */
@@ -222,13 +260,75 @@ function desenharMapa() {
     mctx.translate(camera.x, camera.y);
     mctx.scale(camera.zoom, camera.zoom);
 
-    mctx.strokeStyle = '#222'; mctx.lineWidth = 1 / camera.zoom;
-    for(let i = -1000; i <= 1000; i += 40) {
-        mctx.beginPath(); mctx.moveTo(i, -1000); mctx.lineTo(i, 1000); mctx.stroke();
-        mctx.beginPath(); mctx.moveTo(-1000, i); mctx.lineTo(1000, i); mctx.stroke();
+    const espacamentoPixels = TAMANHO_GRID_MM * PIXELS_POR_MM; // 40 * 0.1 = 4px
+
+    // ========================================================================
+    // RENDERIZAR OS QUADRADOS DO GRID (CHUNKS) BASEADO NOS VALORES (0-255)
+    // ========================================================================
+    for (let chave in mapaGradeGlobal) {
+        // Extrai as coordenadas reais (mm) da chave do objeto
+        let [mmX, mmY] = chave.split('_').map(Number);
+        let valor = mapaGradeGlobal[chave];
+
+        // Converte a posição real (mm) para pixels na tela
+        let pixelX = mmX * PIXELS_POR_MM;
+        let pixelY = mmY * PIXELS_POR_MM;
+
+        // Define a cor baseada na probabilidade (0 a 255)
+        mctx.fillStyle = obterCorOcupacao(valor);
+
+        // Desenha o quadrado preenchido de 40x40mm (4x4px na escala padrão)
+        // Usamos -0.5 ou desconto de 1 no tamanho caso queira uma linha divisória fina entre eles
+        mctx.fillRect(pixelX, pixelY, espacamentoPixels, espacamentoPixels);
     }
-    mctx.fillStyle = varColor('--primaria'); mctx.beginPath(); mctx.arc(0, 0, 10, 0, 2*Math.PI); mctx.fill();
+
+    // ========================================================================
+    // GRID DE LINHAS DE SUPORTE (OPCIONAL - APENAS PARA AJUDAR A ENXERGAR)
+    // ========================================================================
+    mctx.strokeStyle = 'rgba(255, 255, 255, 0.05)'; // Linhas bem discretas sobre os blocos
+    mctx.lineWidth = 0.5 / camera.zoom;
+    const limiteMapa = 2000;
+    for(let i = -limiteMapa; i <= limiteMapa; i += espacamentoPixels) {
+        mctx.beginPath(); mctx.moveTo(i, -limiteMapa); mctx.lineTo(i, limiteMapa); mctx.stroke();
+        mctx.beginPath(); mctx.moveTo(-limiteMapa, i); mctx.lineTo(limiteMapa, i); mctx.stroke();
+    }
+
+    // ==========================================
+    // DESENHAR NUVEM DE PONTOS DO LIDAR (NOVO)
+    // ==========================================
+    mctx.fillStyle = '#ff6b6b'; // Cor vermelha/laranja para os obstáculos
+    for (let i = 0; i < pontosLidarGlobal.length; i++) {
+        let p = pontosLidarGlobal[i];
+        mctx.beginPath();
+        // Desenha pequenos pontos com raio adaptável ao nível do zoom
+        mctx.arc(p.x, p.y, 2 / camera.zoom, 0, 2 * Math.PI);
+        mctx.fill();
+    }
+
+    // ==========================================
+    // DESENHAR O ROBÔ EM SUA POSIÇÃO ATUAL
+    // ==========================================
+    mctx.save();
+    mctx.translate(robot_x, robot_y);
+    mctx.rotate(robot_heading); // Rotaciona o desenho para a direção certa
+
+    // Desenha a base do robô
+    mctx.fillStyle = varColor('--primaria');
+    mctx.beginPath();
+    mctx.arc(0, 0, 12, 0, 2 * Math.PI);
+    mctx.fill();
+
+    // Desenha uma linha direcional indicando a "frente" do robô
+    mctx.strokeStyle = '#fff';
+    mctx.lineWidth = 2 / camera.zoom;
+    mctx.beginPath();
+    mctx.moveTo(0, 0);
+    mctx.lineTo(15, 0);
+    mctx.stroke();
+
+    mctx.restore();
 }
+
 function varColor(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
 
 let arrastando = false, mouseX, mouseY;
@@ -366,9 +466,64 @@ function conectarWS() {
                     document.getElementById('lidar-real').innerText = json.lidar.rpm;
                     document.getElementById('lidar-set').innerText = json.lidar.setpoint;
                     document.getElementById('lidar-pwm').innerText = json.lidar.throttle.toFixed(1) + " %";
-                    desenharArco('gaugeLidar', json.lidar.rpm, 450, varColor('--azul'));
+                    desenharArco('gaugeLidar', json.lidar.rpm, 600, varColor('--azul'));
                 }             
             }
+        } else if (event.data instanceof ArrayBuffer) {
+            const buffer = event.data;
+            const view = new DataView(buffer);
+
+            let offset = 0;
+
+
+            const data_type = view.getUint16(offset, true); offset += 4;
+            if(data_type == 1){ // Lidar reading
+                const length = view.getFloat32(offset, true); offset += 4;
+                const initial_angle = view.getFloat32(offset, true);
+
+                const distances = [];
+                for(let i = 0; i < length; i++){
+                    offset += 4;
+                    distances[i] = view.getFloat32(offset, true);
+                }
+
+                // ==========================================
+                // CÁLCULO GEOMÉTRICO DOS PONTOS (NOVO)
+                // ==========================================
+                const incrementoAngular = 22.5 / length;
+
+                for (let i = 0; i < length; i++) {
+                    const distMm = distances[i] * 10; // Distância bruta vinda do Lidar (em mm)
+
+                    // Ignora leituras inválidas (Ex: menores que 10cm ou maiores que 4 metros)
+                    if (distMm <= 150 || distMm > 4000) continue; 
+                
+                    let anguloGraus = initial_angle + (i * incrementoAngular);
+                    let anguloRad = (anguloGraus * Math.PI / 180.0) + robot_heading;
+                
+                    // CONVERSÃO DE MM PARA PIXELS ANTES DE CALCULAR A POSIÇÃO GLOBAL
+                    let distPixels = distMm * PIXELS_POR_MM;
+                
+                    // Agora o X e Y calculados estarão na escala correta do Canvas
+                    let obstaculoX = robot_x + (distPixels * Math.cos(anguloRad));
+                    let obstaculoY = robot_y + (distPixels * Math.sin(anguloRad));
+                
+                    pontosLidarGlobal.push({ x: obstaculoX, y: obstaculoY });
+                }
+
+                // Limita o histórico de pontos para não travar a renderização do navegador após horas rodando
+                if (pontosLidarGlobal.length > 400) {
+                    pontosLidarGlobal.splice(0, pontosLidarGlobal.length - 400);
+                }
+
+            } else if(data_type == 2){  // Chunk data
+
+            }
+
+            
+            
+            // Força o Canvas a se redesenhar com os novos dados incluídos
+            desenharMapa();
         }
     };
 }
@@ -381,6 +536,63 @@ function mudarPagina(nomePagina) {
     document.querySelectorAll('.btn-nav').forEach(btn => btn.classList.remove('active'));
     if(event) event.target.classList.add('active');
     console.log("Mudando para a página:", nomePagina);
+}
+
+/* ========================================================================
+   6. CONTROLE TELEOPERADO VIA TECLADO (WASD) - TEMPORÁRIO
+   ======================================================================== */
+// Define as velocidades base para o seu motor GA25 (em cm/s ou RPM, dependendo do seu PID)
+const VELOCIDADE_LINEAR = 70.0;  // Velocidade para frente/trás
+const VELOCIDADE_ANGULAR = 40.0; // Velocidade de giro
+
+// Estrutura para rastrear quais teclas estão pressionadas
+let teclasPressionadas = { w: false, a: false, s: false, d: false };
+
+window.addEventListener('keydown', (e) => {
+    let tecla = e.key.toLowerCase();
+    if (teclasPressionadas.hasOwnProperty(tecla) && !teclasPressionadas[tecla]) {
+        teclasPressionadas[tecla] = true;
+        enviarComandoMotor();
+    }
+});
+
+window.addEventListener('keyup', (e) => {
+    let tecla = e.key.toLowerCase();
+    if (teclasPressionadas.hasOwnProperty(tecla)) {
+        teclasPressionadas[tecla] = false;
+        enviarComandoMotor();
+    }
+});
+
+function enviarComandoMotor() {
+    let velEsq = 0;
+    let velDir = 0;
+
+    if (teclasPressionadas.w) { // Frente
+        velEsq += VELOCIDADE_LINEAR;
+        velDir += VELOCIDADE_LINEAR;
+    }
+    if (teclasPressionadas.s) { // Trás
+        velEsq += -VELOCIDADE_LINEAR;
+        velDir += -VELOCIDADE_LINEAR;
+    }
+    if (teclasPressionadas.a) { // Girar para Esquerda no próprio eixo
+        velEsq += -VELOCIDADE_ANGULAR;
+        velDir += VELOCIDADE_ANGULAR;
+    }
+    if (teclasPressionadas.d) { // Girar para Direita no próprio eixo
+        velEsq += VELOCIDADE_ANGULAR;
+        velDir += -VELOCIDADE_ANGULAR;
+    }
+
+    // Só envia se o WebSocket estiver conectado
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+            type: "cmd_vel",
+            left: velEsq,
+            right: velDir
+        }));
+    }
 }
 </script>
 </body>
