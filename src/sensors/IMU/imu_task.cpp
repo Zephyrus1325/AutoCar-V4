@@ -1,55 +1,148 @@
 #include "imu_task.h"
+#include "util/logger.h"
+#include "Wire.h"
 
-// IMU Configs 
-constexpr uint8_t GYRO_SAMPLE_RATE = 0;
-constexpr uint8_t GYRO_RANGE = 0;
+#include "common/imu_data.h"
+#include "common/configs.h"
+#include "Waveshare_10Dof-D.h" 
 
-constexpr uint8_t ACC_SAMPLE_RATE = 0;
-constexpr uint8_t ACC_RANGE = 0;
+#include "util/file_read.h"
 
-MPU6050 mpu;
+
+
+SemaphoreHandle_t imu_mutex;
 TaskHandle_t imu_task_handler;
 
-void imu_task(void* param){
-    // IMU Setup
-    int16_t ax, ay, az, gx, gy, gz;    // Raw Values
+imu_data reading;
 
+struct {
+    struct {
+        struct {
+            float x;
+            float y;
+            float z;
+        } offset;
+
+        struct {    
+            float x;
+            float y;
+            float z;
+        } deadzone;
+    } gyro;
+
+    struct {
+        struct {
+            float x;
+            float y;
+            float z;
+        } offset;
+
+        struct {
+            float x;
+            float y;
+            float z;
+        } scale;
+    } accel;
+
+    struct {
+        struct {
+            float x;
+            float y;
+            float z;
+        } offset;
+
+        struct {
+            float x;
+            float y;
+            float z;
+        } scale;
+    } mag;
+
+} imu_calib;
+
+void get_imu_config(){
+    JsonDocument config = getConfigData();
+
+    imu_calib.accel.offset.x = config["imu"]["accel"]["calibration"]["offset"]["x"];
+    imu_calib.accel.offset.y = config["imu"]["accel"]["calibration"]["offset"]["y"];
+    imu_calib.accel.offset.z = config["imu"]["accel"]["calibration"]["offset"]["z"];
+    imu_calib.accel.scale.x = config["imu"]["accel"]["calibration"]["scale"]["x"];
+    imu_calib.accel.scale.y = config["imu"]["accel"]["calibration"]["scale"]["y"];
+    imu_calib.accel.scale.z = config["imu"]["accel"]["calibration"]["scale"]["z"];
+
+    imu_calib.gyro.offset.x = config["imu"]["gyro"]["calibration"]["offset"]["x"];
+    imu_calib.gyro.offset.y = config["imu"]["gyro"]["calibration"]["offset"]["y"];
+    imu_calib.gyro.offset.z = config["imu"]["gyro"]["calibration"]["offset"]["z"];
+
+    imu_calib.mag.offset.x = config["imu"]["mag"]["calibration"]["offset"]["x"];
+    imu_calib.mag.offset.y = config["imu"]["mag"]["calibration"]["offset"]["y"];
+    imu_calib.mag.offset.z = config["imu"]["mag"]["calibration"]["offset"]["z"];
+    imu_calib.mag.scale.x = config["imu"]["mag"]["calibration"]["scale"]["x"];
+    imu_calib.mag.scale.y = config["imu"]["mag"]["calibration"]["scale"]["y"];
+    imu_calib.mag.scale.z = config["imu"]["mag"]["calibration"]["scale"]["z"];
+
+}
+
+
+
+
+void imu_task(void* param) {
     Wire.begin();
-    mpu.initialize();
+    Wire.setClock(400000); 
+
+    IMU_EN_SENSOR_TYPE motionSensor = IMU_EN_SENSOR_TYPE_NULL;
+    IMU_EN_SENSOR_TYPE pressureSensor = IMU_EN_SENSOR_TYPE_NULL;
+    
+    imuInit(&motionSensor, &pressureSensor);
+
+    if (motionSensor != IMU_EN_SENSOR_TYPE_ICM20948) {
+        print_error("ICM-20948 WAS NOT FOUND");
+        vTaskDelay(portMAX_DELAY);                      // Eventually make it try again and again until it manages to be ok
+    }
+    
+    IMU_ST_ANGLES_DATA angulos;
+    IMU_ST_SENSOR_DATA gyro;
+    IMU_ST_SENSOR_DATA accel;
+    IMU_ST_SENSOR_DATA mag;
+
+    get_imu_config();   // get config :D
 
     while(true){
-        mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+        imuDataGet(&angulos, &gyro, &accel, &mag);
 
+        imu_data temp_data;
 
+        temp_data.accel.x = (accel.s16X + imu_calib.accel.offset.x) * imu_calib.accel.scale.x;
+        temp_data.accel.y = (accel.s16Y + imu_calib.accel.offset.y) * imu_calib.accel.scale.y;
+        temp_data.accel.z = (accel.s16Z + imu_calib.accel.offset.z) * imu_calib.accel.scale.z;
 
-        char b1[8];
-        char b2[8];
-        char b3[8];
-        char b4[8];
-        char b5[8];
-        char b6[8];
+        temp_data.gyro.x = DEG_TO_RAD * (gyro.s16X + imu_calib.gyro.offset.x) / 131.f;
+        temp_data.gyro.y = DEG_TO_RAD * (gyro.s16Y + imu_calib.gyro.offset.y) / 131.f;
+        temp_data.gyro.z = DEG_TO_RAD * (gyro.s16Z + imu_calib.gyro.offset.z) / 131.f;
 
-        sprintf(b1, "%5d", ax);
-        sprintf(b2, "%5d", ay);
-        sprintf(b3, "%5d", az);
-        sprintf(b4, "%5d", gx);
-        sprintf(b5, "%5d", gy);
-        sprintf(b6, "%5d", gz);
+        if(xSemaphoreTake(imu_mutex, 5) == pdTRUE){
+            reading = temp_data;
+            xSemaphoreGive(imu_mutex);
+        }
 
+        delay(IMU_DELAY);
+    }   
+    
+}
 
-        Serial.print("Accel: ");
-        Serial.print(b1);
-        Serial.print(", ");
-        Serial.print(b2);
-        Serial.print(", ");
-        Serial.print(b3);
-        Serial.print(" | Gyro: ");
-        Serial.print(b4);
-        Serial.print(", ");
-        Serial.print(b5);
-        Serial.print(", ");
-        Serial.println(b6);
+imu_data getImuData(){
+    imu_data data;
 
-        vTaskDelay(50); // Sample rate of 100 Hz for now
+    if(xSemaphoreTake(imu_mutex, 5) == pdTRUE){
+        data.accel.x = reading.accel.x;
+        data.accel.y = reading.accel.y;
+        data.accel.z = reading.accel.z;
+        
+        data.gyro.x = reading.gyro.x;
+        data.gyro.y = reading.gyro.y;
+        data.gyro.z = reading.gyro.z;
+        xSemaphoreGive(imu_mutex);
     }
+
+    return data;
 }

@@ -21,8 +21,6 @@ JsonDocument getConfigData(){
         return output;
     }
 
-    
-
     DeserializationError error = deserializeJson(output, file);
 
     file.close();

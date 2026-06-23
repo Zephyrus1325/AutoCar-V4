@@ -298,7 +298,7 @@ function desenharMapa() {
     // ==========================================
     mctx.fillStyle = '#ff6b6b'; // Cor vermelha/laranja para os obstáculos
     for (let i = 0; i < pontosLidarGlobal.length; i++) {
-        let p = pontosLidarGlobal[i];
+        let p = pontosLidarGlobal[i]; 
         mctx.beginPath();
         // Desenha pequenos pontos com raio adaptável ao nível do zoom
         mctx.arc(p.x, p.y, 2 / camera.zoom, 0, 2 * Math.PI);
@@ -409,8 +409,8 @@ function conectarWS() {
         document.getElementById('net-status').style.color = varColor('--primaria');
         adicionarLogConsole("Conexão WebSocket estabelecida!");
 
-        desenharArco('gaugeEsquerdo', 0, 120, varColor('--primaria'));
-        desenharArco('gaugeDireito', 0, 120, varColor('--primaria'));
+        desenharArco('gaugeEsquerdo', 0, 60, varColor('--primaria'));
+        desenharArco('gaugeDireito', 0, 60, varColor('--primaria'));
         desenharArco('gaugeLidar', 0, 450, varColor('--azul'));
 
         setInterval(() => {
@@ -443,31 +443,37 @@ function conectarWS() {
                 if (json.motor != null) {
                     document.getElementById('motE-real').innerText = json.motor.left.speed.toFixed(1) + " cm/s";
                     document.getElementById('motE-set').innerText = json.motor.left.setpoint.toFixed(1) + " cm/s";
-                    document.getElementById('motE-pwm').innerText = json.motor.left.throttle.toFixed(1) + " %";
+                    document.getElementById('motE-pwm').innerText = (json.motor.left.throttle * 100.0).toFixed(1) + " %";
                     
                     document.getElementById('motD-real').innerText = json.motor.right.speed.toFixed(1) + " cm/s";
                     document.getElementById('motD-set').innerText = json.motor.right.setpoint.toFixed(1) + " cm/s";
-                    document.getElementById('motD-pwm').innerText = json.motor.right.throttle.toFixed(1) + " %";
+                    document.getElementById('motD-pwm').innerText = (json.motor.right.throttle * 100.0).toFixed(1) + " %";
                                                                                      
                     if (json.motor.left.speed < 0) {
-                        desenharArco('gaugeEsquerdo', Math.abs(json.motor.left.speed), 120, varColor('--perigo'));
+                        desenharArco('gaugeEsquerdo', Math.abs(json.motor.left.speed), 60, varColor('--perigo'));
                     } else {
-                        desenharArco('gaugeEsquerdo', Math.abs(json.motor.left.speed), 120, varColor('--primaria'));
+                        desenharArco('gaugeEsquerdo', Math.abs(json.motor.left.speed), 60, varColor('--primaria'));
                     }
                     
                     if (json.motor.right.speed < 0) {
-                        desenharArco('gaugeDireito', Math.abs(json.motor.right.speed), 120, varColor('--perigo'));
+                        desenharArco('gaugeDireito', Math.abs(json.motor.right.speed), 60, varColor('--perigo'));
                     } else {
-                        desenharArco('gaugeDireito', Math.abs(json.motor.right.speed), 140, varColor('--primaria'));
+                        desenharArco('gaugeDireito', Math.abs(json.motor.right.speed), 60, varColor('--primaria'));
                     }
                 }
                 
                 if (json.lidar != null) {
                     document.getElementById('lidar-real').innerText = json.lidar.rpm;
                     document.getElementById('lidar-set').innerText = json.lidar.setpoint;
-                    document.getElementById('lidar-pwm').innerText = json.lidar.throttle.toFixed(1) + " %";
+                    document.getElementById('lidar-pwm').innerText = (json.lidar.throttle * 100.0).toFixed(1) + " %";
                     desenharArco('gaugeLidar', json.lidar.rpm, 600, varColor('--azul'));
-                }             
+                }     
+                
+                if (json.navigation != null){
+                    robot_x = json.navigation.position.y;
+                    robot_y = json.navigation.position.x;
+                    robot_heading = json.navigation.position.heading;
+                }
             }
         } else if (event.data instanceof ArrayBuffer) {
             const buffer = event.data;
@@ -517,17 +523,40 @@ function conectarWS() {
                 }
 
             } else if(data_type == 2){  // Chunk data
-
+                console.log(buffer.byteLength);
+                
+                const chunk_x = view.getInt16(offset, true); offset += 2;
+                const chunk_y = view.getInt16(offset, true); offset += 2;
+                const size = view.getUint16(offset, true); offset += 2;
+                const precision = view.getInt16(offset, true); offset += 2;
+                const map_id = view.getUint8(offset, true); offset += 1;
+                offset += 20; // Pula o reserved
+                
+                let base_x = chunk_x * size;
+                let base_y = chunk_y * size;
+                for(let i = 0; i < size * size; i++){
+                    let x = base_x + Math.trunc(i % size);
+                    let y = base_y + Math.trunc(i / size);
+                    let value = view.getUint8(offset, true); offset += 1;
+                    let key = x + "_" + y;
+                    mapaGradeGlobal[key] = value;
+                }
             }
-
-            
-            
             // Força o Canvas a se redesenhar com os novos dados incluídos
-            desenharMapa();
+            
         }
+
+        desenharMapa();
     };
 }
-window.onload = conectarWS;
+// O segredo está aqui: interceptar o evento antes da página descarregar
+window.addEventListener('beforeunload', () => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.close(); // Avisa o ESP32 que está fechando voluntariamente
+    }
+});
+
+window.addEventListener('load', conectarWS);
 
 /* ========================================================================
    5. SISTEMA DE TROCA DE PÁGINAS

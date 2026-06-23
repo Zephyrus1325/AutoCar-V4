@@ -134,7 +134,7 @@ void Lidar::_parse(){
 
         // Get the initial angle and the number of samples
         // Note: angle is 100 times bigger than real angle
-        _internalReading[_activeId]._initialAngle = ((_serial_buffer[START_ANGLE0] << 8) + _serial_buffer[START_ANGLE1]);
+        _internalReading[_activeId]._initialAngle = 0.01f * ((_serial_buffer[START_ANGLE0] << 8) + _serial_buffer[START_ANGLE1]);
         _internalReading[_activeId]._length =  (_serial_buffer[PAYLOAD_LEN] - 5)/3;
 
         // Iterate for each number of samples
@@ -174,7 +174,7 @@ uint16_t LidarData::id(){
 
 // Returns initial reading angle in degrees
 float LidarData::initialAngle(){
-    return this->_initialAngle * 0.01;
+    return this->_initialAngle;
 };
 
 // Returns distance in cm

@@ -59,7 +59,7 @@ void network_task(void* param){
     WiFi.setSleep(false); // Disables power saving completely
 
     startServer();        // Starts server
-    xTaskCreatePinnedToCore(telemetry_task,  "Telemetry Task", 4096, NULL, 1, &telemetry_handler, NETWORK_CORE);
+    xTaskCreatePinnedToCore(telemetry_task, "Telemetry Task", 4096, NULL, 1, &telemetry_handler, NETWORK_CORE);
 
     // Keeps checking for a the connection
     while(true){
