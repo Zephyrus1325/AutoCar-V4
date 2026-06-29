@@ -23,9 +23,9 @@ constexpr int NAVIGATION_STACK_SIZE = 8192;
 constexpr int KINEMATICS_STACK_SIZE = 4096;
 
 // Delay times
-constexpr int NETWORK_DELAY = 10;  // In ms
+constexpr int NETWORK_DELAY = 3;  // In ms
 constexpr int LIDAR_DELAY = 2;  // In ms
-constexpr int CHUNK_DELAY = 100;  // In ms
+constexpr int CHUNK_DELAY = 5;  // In ms
 constexpr int IMU_DELAY = 5;  // In ms
 constexpr int MOTOR_DELAY = 5;  // In ms
 constexpr int NAVIGATION_DELAY = 100;  // In ms
@@ -50,7 +50,7 @@ constexpr const char* MDNS_NAME = "autocar";
 // --------  Navigation ---------
 
 // Chunk
-constexpr uint16_t CHUNK_SIZE = 256;     // Chunk side size in Units
+constexpr uint16_t CHUNK_SIZE = 128;     // Chunk side size in Units
 constexpr uint16_t CHUNK_PRECISION = 40; // In mm
 constexpr uint16_t CHUNK_LOAD_OFFSET = 30; // In units
 constexpr uint16_t CHUNK_LOAD_HISTERISIS = 10; // In units
@@ -82,6 +82,11 @@ constexpr int IMU_FSYNC_PIN = 18;
 // Honker
 constexpr int BUZZER_PIN = 14;
 
+// Battery
 constexpr int BATTERY_PIN = 2;
+constexpr float BATTERY_CALIB_X0 = 39;   // Analog Read at Voltage 1
+constexpr float BATTERY_CALIB_Y0 = 1.2f;   // Voltage 1
+constexpr float BATTERY_CALIB_X1 = 1205;   // Analog Read at Voltage 2
+constexpr float BATTERY_CALIB_Y1 = 11.5f;   // Voltage 2
 
 #endif // CONFIGS_H

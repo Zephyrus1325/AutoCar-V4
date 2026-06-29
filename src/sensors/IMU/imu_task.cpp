@@ -87,9 +87,6 @@ void get_imu_config(){
 
 
 void imu_task(void* param) {
-    Wire.begin();
-    Wire.setClock(400000); 
-
     IMU_EN_SENSOR_TYPE motionSensor = IMU_EN_SENSOR_TYPE_NULL;
     IMU_EN_SENSOR_TYPE pressureSensor = IMU_EN_SENSOR_TYPE_NULL;
     
@@ -97,7 +94,13 @@ void imu_task(void* param) {
 
     if (motionSensor != IMU_EN_SENSOR_TYPE_ICM20948) {
         print_error("ICM-20948 WAS NOT FOUND");
-        vTaskDelay(portMAX_DELAY);                      // Eventually make it try again and again until it manages to be ok
+        
+        while(motionSensor != IMU_EN_SENSOR_TYPE_ICM20948){
+            imuInit(&motionSensor, &pressureSensor);
+            delay(1000);
+        }
+        print_alert("ICM-20948 BACK TO OPERATION");
+        //vTaskDelay(portMAX_DELAY);                      // Eventually make it try again and again until it manages to be ok
     }
     
     IMU_ST_ANGLES_DATA angulos;

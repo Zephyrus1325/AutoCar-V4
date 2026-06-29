@@ -58,6 +58,7 @@ void network_task(void* param){
 
     WiFi.setSleep(false); // Disables power saving completely
 
+    delay(1000);          // Adds a user-unnoticible wait so WiFi is garanteed stable
     startServer();        // Starts server
     xTaskCreatePinnedToCore(telemetry_task, "Telemetry Task", 4096, NULL, 1, &telemetry_handler, NETWORK_CORE);
 
@@ -65,9 +66,10 @@ void network_task(void* param){
     while(true){
         ws.cleanupClients();
         if(WiFi.getMode() == WIFI_STA && !WiFi.isConnected()){
+            print_log("WiFi Connection Lost");
             set_sta();  // Try Connecting again
         }
         vTaskDelay(1000); // Wait a while before checking up again     
     }
-}
+}   
 

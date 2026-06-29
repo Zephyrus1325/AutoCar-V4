@@ -35,15 +35,15 @@ void kinematics_task(void* param){
         imu_data imu = getImuData();
         
         temp.velocity.linear = motor.linear_velocity;
-        temp.velocity.angular = -imu.gyro.z;
+        temp.velocity.angular = imu.gyro.z;                 // TODO: ADD ANGLE COMPENSATION (Also use gyro and accel to compensate angles relative to the ground)
         
         if(abs(temp.velocity.angular) > DEG_TO_RAD * 2.0f){
             temp.position.heading += temp.velocity.angular * delta_time;
             while(temp.position.heading > PI){temp.position.heading -= TWO_PI;}
             while(temp.position.heading < -PI){temp.position.heading += TWO_PI;}
         }
-        temp.position.x += sin(temp.position.heading) * temp.velocity.linear * delta_time;
-        temp.position.y += cos(temp.position.heading) * temp.velocity.linear * delta_time;
+        temp.position.x += cos(temp.position.heading) * temp.velocity.linear * delta_time;
+        temp.position.y += sin(temp.position.heading) * temp.velocity.linear * delta_time;
 
         if(xSemaphoreTake(kinematics_mutex, 5) == pdTRUE){
             kinematics = temp;

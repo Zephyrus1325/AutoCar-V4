@@ -19,22 +19,75 @@
 
 #include "navigation/chunks/chunk.h"
 
+
 AsyncWebServer server(NETWORK_SERVER_PORT);
 AsyncWebSocket ws("/ws");
 
 TaskHandle_t telemetry_handler;
+lidar_packet* lidar_data;   // Packet used to send lidar data
 
-void sendChunkData(uint8_t id){
-    
-    if (active_chunks == nullptr) return;
+// TODO: Add more attributes to the header (too lazy to add more data rn)
+struct __attribute__((packed)) ChunkHeader {
+    uint16_t dataType;  // 2 bytes (ex: valor 2 para Chunk)
+    int16_t chunkX;     // 2 bytes
+    int16_t chunkY;     // 2 bytes
+    uint16_t part;  // 2 bytes (tamanho dos dados que vêm atrás)
+};
 
-    if (active_chunks[id] == nullptr || active_chunks[id]->data == nullptr) {
+void sendChunkData(uint8_t id, uint8_t part, uint8_t* buffer){
+    if (buffer == nullptr) return;
+    if (id >= 4) return;
+    if (part >= 16) return;
+
+    // 1. Tenta pegar o mutex de forma única. Aguarda até 5ms se estiver ocupado.
+    if (xSemaphoreTake(chunk_mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+        
+        // --- SEÇÃO CRÍTICA PROTEGIDA ---
+        // Se qualquer validação falhar, precisamos garantir que o mutex seja liberado!
+        if (active_chunks == nullptr || 
+            active_chunks[id] == nullptr || 
+            active_chunks[id]->data == nullptr) {
+            
+            xSemaphoreGive(chunk_mutex); // Libera o Mutex antes de sair!
+            return;
+        }
+
+        const uint32_t total_map_size = CHUNK_SIZE * CHUNK_SIZE;
+        uint32_t slice_size = total_map_size / 16;
+        uint32_t part_index = slice_size * part; 
+
+        if (part == 15) {
+            slice_size = total_map_size - part_index;
+        }
+
+        // Preenche o cabeçalho no buffer local
+        ChunkHeader* header = (ChunkHeader*) buffer;
+        header->dataType = 2; 
+        header->chunkX = active_chunks[id]->x;
+        header->chunkY = active_chunks[id]->y;
+        header->part = part;
+
+        // Executa a cópia da RAM do chunk para o buffer local de transmissão
+        if (part_index + slice_size <= total_map_size) {
+            memcpy(buffer + sizeof(ChunkHeader), &active_chunks[id]->data[part_index], slice_size);
+        }
+
+        // 计算 Pacote Completo
+        const uint32_t data_size = sizeof(ChunkHeader) + slice_size;
+
+        // --- FIM DA SEÇÃO CRÍTICA ---
+        xSemaphoreGive(chunk_mutex); // Solta o mutex imediatamente!
+
+        // 2. Agora que os dados já estão salvos e isolados no seu buffer local,
+        // você pode transmitir via rede sem prender o resto do robô.
+        ws.binaryAll(buffer, data_size);
+        yield();
+        
+    } else {
+        // Se o mutex estava ocupado com a Task de geração do mapa,
+        // apenas pula esse envio para não travar o FreeRTOS.
         return; 
-    }   
-
-    uint32_t data_size = sizeof(chunk_t) + active_chunks[id]->size * active_chunks[id]->size;
-    ws.binaryAll((uint8_t*) active_chunks[id], data_size);
-    yield();    // give some time so other tasks can breathe
+    }
 }
 
 void sendPositionData(){
@@ -60,10 +113,10 @@ void sendMotorData(){
 
     doc["type"] = "telemetry";
     doc["motor"]["left"]["speed"] = motor.left.linear_velocity;
-    doc["motor"]["left"]["setpoint"] = motor.left.setpoint;
+    doc["motor"]["left"]["setpoint"] = motor.left.setpoint * PI * WHEEL_DIAMETER / 60.f;
     doc["motor"]["left"]["throttle"] = motor.left.throttle;
     doc["motor"]["right"]["speed"] = motor.right.linear_velocity;
-    doc["motor"]["right"]["setpoint"] = motor.right.setpoint;
+    doc["motor"]["right"]["setpoint"] = motor.right.setpoint * PI * WHEEL_DIAMETER / 60.f;
     doc["motor"]["right"]["throttle"] = motor.right.throttle;
     String out;
     serializeJson(doc, out);
@@ -90,27 +143,12 @@ void sendLidarData(){
     // Send actual telemetry, if theres any
     if(info.type != LIDAR_NORMAL){return;}
 
-    lidar_packet packet = getLidarData();
+    getLidarData(lidar_data);
 
     // Send packet data
-    int16_t len = packet.num_samples;
+    int16_t len = lidar_data->num_samples;
 
-    float binary_out[64];
-
-    uint16_t* data_id = (uint16_t*) binary_out;
-    *data_id = 1;                           // Sets id to 1 (Lidar data)g
-
-    binary_out[1] = len;
-    binary_out[2] = packet.angle[0] + 90.f; // TODO: send the correct angle/distance relation
-
-    for(int i = 0; i < len; i++){
-       binary_out[3+i] = packet.distances[i];
-    }
-
-    ws.binaryAll((const char*) binary_out, sizeof(float) * (len + 3));
-
-    free(packet.angle);
-    free(packet.distances);
+    ws.binaryAll((const char*) lidar_data, sizeof(lidar_packet) + sizeof(float) * len * 2);
 }
 
 void handleWebSocketMessage(AsyncWebSocketClient *client, void *arg, uint8_t *data, size_t len) {
@@ -124,6 +162,7 @@ void handleWebSocketMessage(AsyncWebSocketClient *client, void *arg, uint8_t *da
         if(json["type"] == "ping"){
             JsonDocument msg;
             msg["type"] = "pong";
+            msg["battery"] = BATTERY_CALIB_Y0 + (analogRead(BATTERY_PIN) - BATTERY_CALIB_X0) * (BATTERY_CALIB_Y1 - BATTERY_CALIB_Y0)/(BATTERY_CALIB_X1 - BATTERY_CALIB_X0);
             if(WiFi.getMode() == WIFI_STA){
                 msg["rssi"] = WiFi.RSSI();
             } else {
@@ -139,8 +178,7 @@ void handleWebSocketMessage(AsyncWebSocketClient *client, void *arg, uint8_t *da
             float velocidadeDireita = json["right"];
 
             // Aplica diretamente o Setpoint que o seu loop de PID vai ler no próximo update()
-            //left_motor.setRPM(velocidadeEsquerda);
-            //right_motor.setRPM(velocidadeDireita);
+            setMotorSpeed(velocidadeEsquerda, velocidadeDireita);
         }
     }
 
@@ -154,8 +192,7 @@ void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType 
         break;
     case WS_EVT_DISCONNECT:
         print_alert("Client Disconnected.");
-        //left_motor.setRPM(0);       // TEMPORARY STUFF, REMOVE LATER -----------------------------------
-        //right_motor.setRPM(0);      // TEMPORARY STUFF, REMOVE LATER -----------------------------------
+        setMotorSpeed(0, 0);
         break;
     case WS_EVT_DATA:
         handleWebSocketMessage(client, arg, data, len);
@@ -194,19 +231,24 @@ void startServer(){
 
 void telemetry_task(void *args){
     uint64_t last_motor = 0; 
-    uint64_t motor_wait = 50;
+    uint64_t motor_wait = 27;
 
     uint64_t last_chunk = 0;
-    uint64_t chunk_wait = 2000;
+    uint64_t chunk_wait = 49;
 
     uint64_t last_lidar = 0;
-    uint64_t lidar_wait = 100;
+    uint64_t lidar_wait = 102;
     uint8_t lidar_id = 0;
 
     bool lidar_available = false;
     subscribe_lidar(&lidar_available);
+    lidar_data = (lidar_packet*) malloc(sizeof(lidar_packet) + 40 * sizeof(float) * 2); 
 
     uint8_t chunk_id = 0;
+    uint8_t chunk_part = 0;
+
+    const uint32_t data_size = sizeof(ChunkHeader) + (CHUNK_SIZE * CHUNK_SIZE) / 16;
+    uint8_t* chunk_buffer = (uint8_t*) malloc(data_size);
 
     while(true){
         if(ws.count() > 0){
@@ -214,12 +256,6 @@ void telemetry_task(void *args){
                 sendMotorData();
                 sendPositionData();
                 last_motor = millis();
-            }
-
-            if(millis() - last_chunk > chunk_wait){
-                //sendChunkData(chunk_id++);
-                chunk_id = chunk_id > 4 ? 0 : chunk_id;
-                last_chunk = millis();
             }
             
             if(millis() - last_lidar > lidar_wait){
@@ -230,6 +266,17 @@ void telemetry_task(void *args){
                 }
                 if(lidar_id > 16){last_lidar = millis(); lidar_id = 0;}
             }   
+
+            if(millis() - last_chunk > chunk_wait){
+                sendChunkData(chunk_id, chunk_part++, chunk_buffer);
+                if(chunk_part >= 16){
+                    chunk_part = 0;
+                    chunk_id++;
+                    chunk_id = chunk_id > 4 ? 0 : chunk_id;
+                }
+                
+                last_chunk = millis();
+            }
             
             delay(NETWORK_DELAY);
             //yield();

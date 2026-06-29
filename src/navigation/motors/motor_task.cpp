@@ -93,6 +93,11 @@ void motor_task(void* param){
     }
 }
 
+void setMotorSpeed(float left, float right){
+    left_motor.setRPM(left /(PI * WHEEL_DIAMETER / 60.f) );
+    right_motor.setRPM(right /(PI * WHEEL_DIAMETER / 60.f) );
+}
+
 motor_data getMotorData(){
     motor_data out;
 

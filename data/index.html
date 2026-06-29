@@ -144,6 +144,7 @@
             <div>Status: <span id="net-status" class="net-status">DESCONECTADO</span></div>
             <div>Ping: <span id="net-ping" style="color:var(--alerta)">-- ms</span></div>
             <div>RSSI: <span id="net-rssi" style="color:var(--azul)">-- dBm</span></div>
+            <div>Battery: <span id="battery_voltage" style="color:var(--primaria)">--.- V</span></div>
         </div>
     </div>
 
@@ -237,94 +238,139 @@ function obterCorOcupacao(valor) {
         return `rgba(${r}, ${g}, ${b}, 0.9)`;
     }
 }
-
 /* ========================================================================
-   1. GERENCIAMENTO DO MAPA (HTML5 CANVAS COM PAN/ZOOM)
+   CANVAS PRINCIPAL E CANVAS DE CACHE (OFFSCREEN)
    ======================================================================== */
 const mapCanvas = document.getElementById('mapCanvas');
 const mctx = mapCanvas.getContext('2d');
 
+let camera = { x: mapCanvas.width / 2, y: mapCanvas.height / 2, zoom: 1.0 };
+let mapaChunks = [ {x: 0, y: 0}, {x: 100, y: -80} ];
+
+// Criamos um canvas invisível para servir de buffer estático do grid
+const cacheCanvas = document.createElement('canvas');
+const cctx = cacheCanvas.getContext('2d');
+
+// Controle para saber quando o grid realmente mudou e precisa ser redesenhado no cache
+let gridNecessitaRedesenho = true;
+
 function redimensionarMapa() {
     mapCanvas.width = mapCanvas.parentElement.clientWidth;
     mapCanvas.height = mapCanvas.parentElement.clientHeight;
+    
+    // O tamanho do cache do mapa global (ex: 4000x4000 pixels para cobrir a área do robô)
+    cacheCanvas.width = 4000;
+    cacheCanvas.height = 4000;
+    
+    gridNecessitaRedesenho = true;
 }
 redimensionarMapa();
 window.addEventListener('resize', () => { redimensionarMapa(); desenharMapa(); });
 
-let camera = { x: mapCanvas.width / 2, y: mapCanvas.height / 2, zoom: 1.0 };
-let mapaChunks = [ {x: 0, y: 0}, {x: 100, y: -80} ];
+// Armazene os dados convertendo a chave em objeto direto no WebSocket para evitar split()
+// Quando receber o chunk no WebSocket, mude para alimentar o objeto e setar a flag:
+// mapaGradeGlobal[key] = { x: mmX, y: mmY, v: value };
+// gridNecessitaRedesenho = true;
 
-function desenharMapa() {
-    mctx.setTransform(1, 0, 0, 1, 0, 0);
-    mctx.clearRect(0, 0, mapCanvas.width, mapCanvas.height);
-    mctx.translate(camera.x, camera.y);
-    mctx.scale(camera.zoom, camera.zoom);
+/* ========================================================================
+   FUNÇÃO AUXILIAR: ATUALIZA APENAS O GRID ESTÁTICO (CHUNKS)
+   ======================================================================== */
+function renderizarGridNoCache() {
+    cctx.clearRect(0, 0, cacheCanvas.width, cacheCanvas.height);
+    
+    // Centraliza a origem (0,0) do robô no meio do canvas de cache
+    cctx.save();
+    cctx.translate(cacheCanvas.width / 2, cacheCanvas.height / 2);
+    
+    const espacamentoPixels = TAMANHO_GRID_MM * PIXELS_POR_MM;
 
-    const espacamentoPixels = TAMANHO_GRID_MM * PIXELS_POR_MM; // 40 * 0.1 = 4px
-
-    // ========================================================================
-    // RENDERIZAR OS QUADRADOS DO GRID (CHUNKS) BASEADO NOS VALORES (0-255)
-    // ========================================================================
+    // 1. DESENHA OS CHUNKS
     for (let chave in mapaGradeGlobal) {
-        // Extrai as coordenadas reais (mm) da chave do objeto
+        let dados = mapaGradeGlobal[chave];
+        // Se mudou o parser no WebSocket para objeto direto:
+        // let pixelX = dados.x * PIXELS_POR_MM;
+        // let pixelY = dados.y * PIXELS_POR_MM;
+        // let valor = dados.v;
+        
+        // Se manteve string por enquanto, o split roda apenas aqui (fora do loop principal de render)
         let [mmX, mmY] = chave.split('_').map(Number);
         let valor = mapaGradeGlobal[chave];
-
-        // Converte a posição real (mm) para pixels na tela
         let pixelX = mmX * PIXELS_POR_MM;
         let pixelY = mmY * PIXELS_POR_MM;
 
-        // Define a cor baseada na probabilidade (0 a 255)
-        mctx.fillStyle = obterCorOcupacao(valor);
-
-        // Desenha o quadrado preenchido de 40x40mm (4x4px na escala padrão)
-        // Usamos -0.5 ou desconto de 1 no tamanho caso queira uma linha divisória fina entre eles
-        mctx.fillRect(pixelX, pixelY, espacamentoPixels, espacamentoPixels);
+        cctx.fillStyle = obterCorOcupacao(valor);
+        cctx.fillRect(pixelX, pixelY, espacamentoPixels, espacamentoPixels);
     }
 
-    // ========================================================================
-    // GRID DE LINHAS DE SUPORTE (OPCIONAL - APENAS PARA AJUDAR A ENXERGAR)
-    // ========================================================================
-    mctx.strokeStyle = 'rgba(255, 255, 255, 0.05)'; // Linhas bem discretas sobre os blocos
-    mctx.lineWidth = 0.5 / camera.zoom;
+    // 2. DESENHA AS LINHAS DE SUPORTE (Rodando uma única vez aqui)
+    cctx.strokeStyle = 'rgba(255, 255, 255, 0.03)';
+    cctx.lineWidth = 0.5;
     const limiteMapa = 2000;
-    for(let i = -limiteMapa; i <= limiteMapa; i += espacamentoPixels) {
-        mctx.beginPath(); mctx.moveTo(i, -limiteMapa); mctx.lineTo(i, limiteMapa); mctx.stroke();
-        mctx.beginPath(); mctx.moveTo(-limiteMapa, i); mctx.lineTo(limiteMapa, i); mctx.stroke();
+    cctx.beginPath();
+    for (let i = -limiteMapa; i <= limiteMapa; i += espacamentoPixels) {
+        cctx.moveTo(i, -limiteMapa); cctx.lineTo(i, limiteMapa);
+        cctx.moveTo(-limiteMapa, i); cctx.lineTo(limiteMapa, i);
+    }
+    cctx.stroke();
+
+    cctx.restore();
+    gridNecessitaRedesenho = false; // Cache atualizado!
+}
+
+
+/* ========================================================================
+   RENDERIZADOR DO MAPA PRINCIPAL (CHAMADO A CADA FRAME - ULTRA RÁPIDO)
+   ======================================================================== */
+function desenharMapa() {
+    // Se houve novos dados de Chunk, atualiza a imagem estática de fundo primeiro
+    if (gridNecessitaRedesenho) {
+        renderizarGridNoCache();
     }
 
-    // ==========================================
-    // DESENHAR NUVEM DE PONTOS DO LIDAR (NOVO)
-    // ==========================================
-    mctx.fillStyle = '#ff6b6b'; // Cor vermelha/laranja para os obstáculos
+    // Limpa o canvas visível da tela
+    mctx.setTransform(1, 0, 0, 1, 0, 0);
+    mctx.clearRect(0, 0, mapCanvas.width, mapCanvas.height);
+    
+    // Aplica Pan e Zoom da Câmera
+    mctx.translate(camera.x, camera.y);
+    mctx.scale(camera.zoom, camera.zoom);
+
+    // ========================================================================
+    // PASSO 1: DESENHA O MAPA INTEIRO VIA HARDWARE (Apenas joga o cache na tela)
+    // ========================================================================
+    // drawImage usa aceleração gráfica da GPU. É instantâneo, mesmo com zoom.
+    mctx.drawImage(cacheCanvas, -cacheCanvas.width / 2, -cacheCanvas.height / 2);
+
+    // ========================================================================
+    // PASSO 2: DESENHA OS ELEMENTOS DINÂMICOS (Nuvem do Lidar)
+    // ========================================================================
+    mctx.fillStyle = '#ff6b6b';
+    const raioPonto = 2 / camera.zoom;
+    
+    // Otimização: Agrupa os desenhos em um único path para enviar de uma vez para a GPU
+    mctx.beginPath();
     for (let i = 0; i < pontosLidarGlobal.length; i++) {
         let p = pontosLidarGlobal[i]; 
-        mctx.beginPath();
-        // Desenha pequenos pontos com raio adaptável ao nível do zoom
-        mctx.arc(p.x, p.y, 2 / camera.zoom, 0, 2 * Math.PI);
-        mctx.fill();
+        mctx.moveTo(p.x, p.y);
+        mctx.arc(p.x, p.y, raioPonto, 0, 2 * Math.PI);
     }
+    mctx.fill();
 
-    // ==========================================
-    // DESENHAR O ROBÔ EM SUA POSIÇÃO ATUAL
-    // ==========================================
+    // ========================================================================
+    // PASSO 3: DESENHA O ROBÔ (Posição Dinâmica)
+    // ========================================================================
     mctx.save();
-    mctx.translate(robot_x, robot_y);
-    mctx.rotate(robot_heading); // Rotaciona o desenho para a direção certa
+    mctx.translate(robot_x, -robot_y);
+    mctx.rotate(-robot_heading);
 
-    // Desenha a base do robô
     mctx.fillStyle = varColor('--primaria');
     mctx.beginPath();
     mctx.arc(0, 0, 12, 0, 2 * Math.PI);
     mctx.fill();
 
-    // Desenha uma linha direcional indicando a "frente" do robô
     mctx.strokeStyle = '#fff';
     mctx.lineWidth = 2 / camera.zoom;
-    mctx.beginPath();
-    mctx.moveTo(0, 0);
-    mctx.lineTo(15, 0);
-    mctx.stroke();
+    mctx.beginPath(); mctx.moveTo(0, 0); mctx.lineTo(15, 0); mctx.stroke();
 
     mctx.restore();
 }
@@ -398,7 +444,8 @@ function adicionarLogConsole(mensagem) {
    ======================================================================== */
 let ws;
 let tInicioPing;
-let urlWS = 'ws://' + window.location.hostname + '/ws';
+//let urlWS = 'ws://' + window.location.hostname + '/ws';
+let urlWS = 'ws://' + "autocar.local" + '/ws';
 
 function conectarWS() {
     ws = new WebSocket(urlWS);
@@ -433,6 +480,7 @@ function conectarWS() {
             if (json.type === "pong") {
                 document.getElementById('net-ping').innerText = Math.round(performance.now() - tInicioPing) + " ms";
                 document.getElementById('net-rssi').innerText = json.rssi + " dBm";
+                document.getElementById('battery_voltage').innerText = json.battery.toFixed(1) + " V";
             }
             else if (json.type === "telemetry") {
                 // Intercepta e renderiza texto no console caso exista no JSON
@@ -470,9 +518,10 @@ function conectarWS() {
                 }     
                 
                 if (json.navigation != null){
-                    robot_x = json.navigation.position.y;
-                    robot_y = json.navigation.position.x;
+                    robot_x = json.navigation.position.x;
+                    robot_y = json.navigation.position.y;
                     robot_heading = json.navigation.position.heading;
+                    console.log(robot_x + " | " + robot_y);
                 }
             }
         } else if (event.data instanceof ArrayBuffer) {
@@ -481,22 +530,27 @@ function conectarWS() {
 
             let offset = 0;
 
-
-            const data_type = view.getUint16(offset, true); offset += 4;
+            const data_type = view.getUint16(offset, true); offset += 2;
+            
             if(data_type == 1){ // Lidar reading
-                const length = view.getFloat32(offset, true); offset += 4;
-                const initial_angle = view.getFloat32(offset, true);
+                const length = view.getUint16(offset, true);
+                offset += 2;
+
+                const angles = [];
+                for(let i = 0; i < length; i++){
+                    angles[i] = view.getFloat32(offset, true);
+                    offset += 4;
+                }
 
                 const distances = [];
                 for(let i = 0; i < length; i++){
-                    offset += 4;
                     distances[i] = view.getFloat32(offset, true);
+                    offset += 4;
                 }
 
                 // ==========================================
                 // CÁLCULO GEOMÉTRICO DOS PONTOS (NOVO)
                 // ==========================================
-                const incrementoAngular = 22.5 / length;
 
                 for (let i = 0; i < length; i++) {
                     const distMm = distances[i] * 10; // Distância bruta vinda do Lidar (em mm)
@@ -504,17 +558,17 @@ function conectarWS() {
                     // Ignora leituras inválidas (Ex: menores que 10cm ou maiores que 4 metros)
                     if (distMm <= 150 || distMm > 4000) continue; 
                 
-                    let anguloGraus = initial_angle + (i * incrementoAngular);
-                    let anguloRad = (anguloGraus * Math.PI / 180.0) + robot_heading;
+                    let anguloLocal = angles[i];
+                    let anguloGlobal = anguloLocal + robot_heading;
                 
                     // CONVERSÃO DE MM PARA PIXELS ANTES DE CALCULAR A POSIÇÃO GLOBAL
                     let distPixels = distMm * PIXELS_POR_MM;
                 
                     // Agora o X e Y calculados estarão na escala correta do Canvas
-                    let obstaculoX = robot_x + (distPixels * Math.cos(anguloRad));
-                    let obstaculoY = robot_y + (distPixels * Math.sin(anguloRad));
+                    let obstaculoX = -robot_x + (distPixels * Math.cos(anguloGlobal));
+                    let obstaculoY = -robot_y + (distPixels * Math.sin(anguloGlobal));
                 
-                    pontosLidarGlobal.push({ x: obstaculoX, y: obstaculoY });
+                    pontosLidarGlobal.push({ x: -obstaculoX, y: obstaculoY });
                 }
 
                 // Limita o histórico de pontos para não travar a renderização do navegador após horas rodando
@@ -523,23 +577,27 @@ function conectarWS() {
                 }
 
             } else if(data_type == 2){  // Chunk data
-                console.log(buffer.byteLength);
+                
                 
                 const chunk_x = view.getInt16(offset, true); offset += 2;
                 const chunk_y = view.getInt16(offset, true); offset += 2;
-                const size = view.getUint16(offset, true); offset += 2;
-                const precision = view.getInt16(offset, true); offset += 2;
-                const map_id = view.getUint8(offset, true); offset += 1;
-                offset += 20; // Pula o reserved
-                
-                let base_x = chunk_x * size;
-                let base_y = chunk_y * size;
-                for(let i = 0; i < size * size; i++){
-                    let x = base_x + Math.trunc(i % size);
-                    let y = base_y + Math.trunc(i / size);
+                const part = view.getUint16(offset, true); offset += 2;
+
+                let base_x = chunk_x * 128 * 40;    // Corrigir isso eventualmente... -_-
+                let base_y = chunk_y * 128 * 40;    //
+
+                let len = Math.trunc(128 * 128 / 16);
+                let start_id = part * len;
+
+                for(let i = start_id; i < start_id + len; i++){
+                    let x = base_x + Math.trunc(i % 128) * 40;
+                    let y = base_y + Math.trunc(i / 128) * 40;
                     let value = view.getUint8(offset, true); offset += 1;
-                    let key = x + "_" + y;
+                    let key = -x + "_" + y;
                     mapaGradeGlobal[key] = value;
+                }
+                if(part == 15){
+                    gridNecessitaRedesenho = true;
                 }
             }
             // Força o Canvas a se redesenhar com os novos dados incluídos
@@ -571,8 +629,8 @@ function mudarPagina(nomePagina) {
    6. CONTROLE TELEOPERADO VIA TECLADO (WASD) - TEMPORÁRIO
    ======================================================================== */
 // Define as velocidades base para o seu motor GA25 (em cm/s ou RPM, dependendo do seu PID)
-const VELOCIDADE_LINEAR = 70.0;  // Velocidade para frente/trás
-const VELOCIDADE_ANGULAR = 40.0; // Velocidade de giro
+const VELOCIDADE_LINEAR = 30.0;  // Velocidade para frente/trás
+const VELOCIDADE_ANGULAR = 10.0; // Velocidade de giro
 
 // Estrutura para rastrear quais teclas estão pressionadas
 let teclasPressionadas = { w: false, a: false, s: false, d: false };
@@ -607,7 +665,7 @@ function enviarComandoMotor() {
     }
     if (teclasPressionadas.a) { // Girar para Esquerda no próprio eixo
         velEsq += -VELOCIDADE_ANGULAR;
-        velDir += VELOCIDADE_ANGULAR;
+        velDir += VELOCIDADE_ANGULAR;   // VELOCIDADES ANGULAS SENDO CALCULADAS ERRADO - ALTERAR PARA FORMULA CERTA EVENUTALMENTE.
     }
     if (teclasPressionadas.d) { // Girar para Direita no próprio eixo
         velEsq += VELOCIDADE_ANGULAR;

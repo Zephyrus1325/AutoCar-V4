@@ -9,13 +9,12 @@ typedef enum {
 } lidar_info_type;
 
 
-// REMEMBER TO FREE THE FUCKING ARRAYS YOU FUCKING MOTHERFUCKER
-// I know you won't, I know you well you sucker
+// Allocate about like 330 bytes, I dunno, lol
 typedef struct {
+    uint16_t type;      // Making my life easier, again
     uint16_t num_samples;
-    float* angle;           // Reading angle relative to the robot, +clockwise, 0 deg at right
-    float* distances;       // Distances in cm
-} lidar_packet;
+    float data[];       // Angles in rad | Distances in cm
+} __attribute__((packed)) lidar_packet;
 
 typedef struct {
     float throttle;         // in percentage (0.0f to 1.0f)
@@ -28,7 +27,7 @@ typedef struct {
 // Lidar data is a special kind of data where the tasks will need to process only new data
 // so makes sense to make them subscribe to a lidar data publisher 
 void subscribe_lidar(bool* flag_ptr); 
-lidar_packet getLidarData();
+void getLidarData(lidar_packet* buffer);
 lidar_info getLidarInfo();
 
 #endif // LIDAR_DATA_H

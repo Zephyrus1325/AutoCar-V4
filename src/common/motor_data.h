@@ -21,5 +21,6 @@ typedef struct {
 } motor_data;
 
 motor_data getMotorData();
+void setMotorSpeed(float left, float right);    // Sets motor linear velocity (in cm/s)
 
 #endif // MOTOR_DATA_H
