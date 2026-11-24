@@ -3,7 +3,6 @@
 
 #include <Arduino.h>
 
-QueueHandle_t lidar_readings_network;       // Lidar -> Network
-QueueHandle_t lidar_readings_navigation;    // Lidar -> Navigation
+QueueHandle_t health_status_queue;
 
 #endif // QUEUES_H

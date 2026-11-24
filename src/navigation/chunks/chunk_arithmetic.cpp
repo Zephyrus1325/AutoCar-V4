@@ -1,45 +1,38 @@
 #include "chunk_arithmetic.h"
 #include "common/configs.h"
 
-// return global position in mm
-vector_t chunkLocalToGlobalCoordinates(uint16_t x, uint16_t y, int16_t chunk_x, int16_t chunk_y){
-    vector_t position;
-    //         |   Gross position   |   Finer position
-    position.x = (chunk_x * CHUNK_SIZE + x) * CHUNK_PRECISION / 10.f;
-    position.y = (chunk_y * CHUNK_SIZE + y) * CHUNK_PRECISION / 10.f;
+#include "util/logger.h"
 
-    return position;
+// TODO: Make it so it doesnt allocate memory, let the caller allocate it for us
+chunk_t* generateChunk(int16_t x, int16_t y, uint16_t size, uint16_t precision){
+    uint32_t total_size = sizeof(chunk_t) + (sizeof(uint8_t) * size * size);
+    
+    chunk_t* c = (chunk_t*) ps_malloc(total_size);
+
+    // PROTEÇÃO ABSOLUTA: Se o ESP32 estiver sem RAM, evita o crash
+    if (c == nullptr) {
+        print_error("Failure during chunk allocation");
+        return nullptr; 
+    }
+    
+    c->x = x;
+    c->y = y;
+    c->size = size;
+    c->precision = precision;
+    c->map_id = 0;      
+
+    // Limpa os valores de forma segura
+    for(int i = 0; i < size * size; i++){
+        c->data[i] = 127; 
+    }
+
+    return c; // Retorna o ponteiro correto e funcional
 }
 
-// Global -> ChunkPos
-vector_t globalToChunkLocalCoordinates(int32_t y, int32_t x){
-    vector_t position;
-
-    position.x = (x * 10 / CHUNK_PRECISION) % (uint32_t)(CHUNK_SIZE);
-    position.y = (y * 10 / CHUNK_PRECISION) % (uint32_t)(CHUNK_SIZE);
-
-    return position;
+void deleteChunk(chunk_t* c){
+    if(c == nullptr){return;}
+    c->size = 0;
+    c->precision = 0;
+    free(c);
 }
 
-// Global -> Chunk
-vector_t globalToChunkCoordinates(int32_t x, int32_t y){
-    vector_t position;
-
-    position.x = x / (int32_t)(CHUNK_SIZE * CHUNK_PRECISION / 10.f);
-    position.y = y / (int32_t)(CHUNK_SIZE * CHUNK_PRECISION / 10.f);
-
-    return position;
-}
-
- // Its in local coordinates
-void setChunkValue(uint16_t x, uint16_t y, uint16_t value, chunk_t* chunk){
-    uint16_t address = y * CHUNK_SIZE + x;
-    chunk->data[address] = value;
-}
-
-// // Its in local coordinates
-//uint16_t getChunkValue(uint16_t x, uint16_t y, chunk_t* chunk){
-//    uint16_t value_out;
-//    uint16_t address = y * CHUNK_SIZE + x;
-//    value_out = chunk->data[address];
-//}

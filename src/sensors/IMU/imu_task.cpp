@@ -8,7 +8,7 @@
 
 #include "util/file_read.h"
 
-
+#define GYRO_IMU_TO_CM_S2 (float)(1.f / 16383.f)
 
 SemaphoreHandle_t imu_mutex;
 TaskHandle_t imu_task_handler;
@@ -91,7 +91,7 @@ void imu_task(void* param) {
     IMU_EN_SENSOR_TYPE pressureSensor = IMU_EN_SENSOR_TYPE_NULL;
     
     imuInit(&motionSensor, &pressureSensor);
-
+    
     if (motionSensor != IMU_EN_SENSOR_TYPE_ICM20948) {
         print_error("ICM-20948 WAS NOT FOUND");
         
@@ -101,6 +101,8 @@ void imu_task(void* param) {
         }
         print_alert("ICM-20948 BACK TO OPERATION");
         //vTaskDelay(portMAX_DELAY);                      // Eventually make it try again and again until it manages to be ok
+    } else {
+        print_log("IMU init OK.");
     }
     
     IMU_ST_ANGLES_DATA angulos;
@@ -110,14 +112,17 @@ void imu_task(void* param) {
 
     get_imu_config();   // get config :D
 
+    int counter = 0;
+
+
     while(true){
         imuDataGet(&angulos, &gyro, &accel, &mag);
 
         imu_data temp_data;
 
-        temp_data.accel.x = (accel.s16X + imu_calib.accel.offset.x) * imu_calib.accel.scale.x;
-        temp_data.accel.y = (accel.s16Y + imu_calib.accel.offset.y) * imu_calib.accel.scale.y;
-        temp_data.accel.z = (accel.s16Z + imu_calib.accel.offset.z) * imu_calib.accel.scale.z;
+        temp_data.accel.x = (accel.s16X + imu_calib.accel.offset.x) * imu_calib.accel.scale.x * GYRO_IMU_TO_CM_S2;
+        temp_data.accel.y = (accel.s16Y + imu_calib.accel.offset.y) * imu_calib.accel.scale.y * GYRO_IMU_TO_CM_S2;
+        temp_data.accel.z = (accel.s16Z + imu_calib.accel.offset.z) * imu_calib.accel.scale.z * GYRO_IMU_TO_CM_S2;
 
         temp_data.gyro.x = DEG_TO_RAD * (gyro.s16X + imu_calib.gyro.offset.x) / 131.f;
         temp_data.gyro.y = DEG_TO_RAD * (gyro.s16Y + imu_calib.gyro.offset.y) / 131.f;

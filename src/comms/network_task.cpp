@@ -14,17 +14,42 @@ void network_print(String str){
     print_alert("Function \"<network_print()\" not implemented.");
 }
 
+void scan_ssid(){
+    Serial.println("Scan start");
+  int n = WiFi.scanNetworks();
+  Serial.println("Scan done");
+  if (n == 0) {
+    Serial.println("No networks found");
+  } else {
+    Serial.print(n);
+    Serial.println(" networks found");
+    for (int i = 0; i < n; ++i) {
+      Serial.print(i + 1);
+      Serial.print(": ");
+      Serial.print(WiFi.SSID(i));
+      Serial.print(" (");
+      Serial.print(WiFi.RSSI(i));
+      Serial.print(")");
+      Serial.println((WiFi.encryptionType(i) == WIFI_AUTH_OPEN) ? " " : "*");
+      delay(10);
+    }
+  }
+  Serial.println("");
+  WiFi.scanDelete();
+  delay(5000);
+}
+
 // Tries to connect to a router
 void set_sta(){
     JsonDocument config = getConfigData();
 
     const char* ssid = config["wifi"]["ssid"];
     const char* password = config["wifi"]["password"];
-    
+
     WiFi.disconnect();      // Disconnects from last WiFi access
     WiFi.mode(WIFI_STA);
     WiFi.begin(ssid, password);
-    uint32_t delay_cycles = 50;        // Variable to measure how much time we waited and timeout otherwise
+    uint32_t delay_cycles = 500;        // Variable to measure how much time we waited and timeout otherwise
     while((WiFi.status() != WL_CONNECTED) && delay_cycles > 0){
         delay(50);          // Waits a bit to allow for the connection to be established
         delay_cycles--;
@@ -64,7 +89,6 @@ void network_task(void* param){
 
     // Keeps checking for a the connection
     while(true){
-        ws.cleanupClients();
         if(WiFi.getMode() == WIFI_STA && !WiFi.isConnected()){
             print_log("WiFi Connection Lost");
             set_sta();  // Try Connecting again

@@ -7,168 +7,207 @@
 #include "common/configs.h"
 #include "util/logger.h"
 
+//#include "esp_dsp.h"
+
+//using namespace dspm;
+
 chunk_t* active_chunks[4];
 chunk_t* inactive_chunk;
 
 SemaphoreHandle_t chunk_mutex;
 TaskHandle_t chunk_task_handler;
 
-// Bonjour, this is probably the HEAVIEST function in the project
-// Like, look how many for() loops there are
-void parseLidar(lidar_packet* sample){
-    
-    robot_kinematic robot = getKinematics();
+typedef struct{
+    float value;    // Interpolated value
+    float dx;       // Partial derivative in X direction
+    float dy;       // Partial derivative in Y direction
+} interp_value_t;
 
-    // Note for self - Eventually raycast the reading, and filter out the relevant chunks for that one reading, may be more efficient
-    // Step 1 - Find the chunk id for actual robot position
-    vector_t chunk_pos = globalToChunkCoordinates(robot.position.x, -robot.position.y);
-    int start_id = -1;
+interp_value_t interpolatePosition(float x, float y){
+    interp_value_t output;
+    int32_t x0 = (int32_t)floorf(x);    // ^ Y
+    int32_t y0 = (int32_t)floorf(y);    // | (x0, y1) | (x1, y1)
+    int32_t x1 = x0 + 1;                // | (x0, y0) | (x1, y0)
+    int32_t y1 = y0 + 1;                // +--------------------> X
 
-    if(xSemaphoreTake(chunk_mutex, 5) == pdTRUE){
-        for(int i = 0; i < 4; i++){
-            if(active_chunks[i] != nullptr &&
-               active_chunks[i]->x == chunk_pos.x &&
-               active_chunks[i]->y == chunk_pos.y){
-                start_id = i;
-                break;
-            }
+    float u = x - (float)x0;
+    float v = y - (float)y0;
+
+    float P00 = (float)getGridValue(x0, y0) / 255.f; // ^ Y
+    float P10 = (float)getGridValue(x1, y0) / 255.f; // | (P01) | (P11)
+    float P01 = (float)getGridValue(x0, y1) / 255.f; // | (P00) | (P10)
+    float P11 = (float)getGridValue(x1, y1) / 255.f; // +--------------------> X
+
+
+    // Do some algebra magic... (Bilinear interpolation)
+    output.value = (1.0f - u) * (1.0f - v) * P00 + u * (1.0f - v) * P10 + (1.0f - u) * v * P01 + u * v * P11;
+    output.dx = (1.0f - v) * (P10 - P00) + v * (P11 - P01);
+    output.dy = (1.0f - u) * (P01 - P00) + u * (P11 - P10);
+
+    return output;
+}
+
+bool doSlam(lidar_packet* lidar, robot_kinematic* robot){
+
+    for(int iteration = 0; iteration < CHUNK_MAX_ITERATIONS; iteration++){
+        float H[3][3] = {0};
+        float sigma[3] = {0};
+
+        float sin_theta = sinf(robot->position.heading);
+        float cos_theta = cosf(robot->position.heading);
+
+        for(int i = 0; i < lidar->num_samples; i++){
+            // Keep this until I have the balls to make lidar_task do this (and adapt everyone else to deal with this...)
+            float sample_x = lidar->distance(i) * cosf(lidar->angle(i)); // In local lidar coordinates
+            float sample_y = lidar->distance(i) * sinf(lidar->angle(i)); // In local lidar coordinates
+
+            float world_x = (cos_theta * sample_x) - (sin_theta * sample_y) + robot->position.x;
+            float world_y = (sin_theta * sample_x) + (cos_theta * sample_y) + robot->position.y;
+
+            float grid_x = world_x * (1.f/CHUNK_PRECISION);   // Convert points from cm to chunk
+            float grid_y = world_y * (1.f/CHUNK_PRECISION);   // Convert points from cm to chunk
+
+            interp_value_t cell = interpolatePosition(grid_x, grid_y);
+
+            float error = 1.0f - cell.value;
+
+            float j_x = cell.dx * (1.f/CHUNK_PRECISION);
+            float j_y = cell.dy * (1.f/CHUNK_PRECISION);
+            
+
+            float j_theta = cell.dx * (1.f/CHUNK_PRECISION) * (-sin_theta * sample_x - cos_theta * sample_y) +
+                            cell.dy * (1.f/CHUNK_PRECISION) * ( cos_theta * sample_x - sin_theta * sample_y);
+
+            // Acumula a Matriz Hessiana (H = J^T * J) - Aproveitando a simetria de H
+            H[0][0] += j_x * j_x;     
+            H[0][1] += j_x * j_y;     
+            H[0][2] += j_x * j_theta;                 
+            H[1][1] += j_y * j_y;     
+            H[1][2] += j_y * j_theta;                                             
+            H[2][2] += j_theta * j_theta;
+
+            // Acumula o Vetor de Gradiente Residual (Sigma = J^T * erro)
+            sigma[0] += j_x * error;
+            sigma[1] += j_y * error;
+            sigma[2] += j_theta * error;
         }
-        xSemaphoreGive(chunk_mutex);
+
+        // Preenche a metade inferior espelhada da Hessiana
+        H[1][0] = H[0][1];
+        H[2][0] = H[0][2];
+        H[2][1] = H[1][2];
+
+        float lambda = 0.01f; // Fator de amortecimento (mola virtual)
+
+        H[0][0] += lambda;
+        H[1][1] += lambda;
+        H[2][2] += lambda;
+
+        // Tchebychev/Regra de Cramer para resolver H * delta_pose = sigma
+        // Como a matriz é minúscula (3x3), resolvemos direto via determinantes (Ultra rápido)
+        float det_H = H[0][0] * (H[1][1] * H[2][2] - H[1][2] * H[2][1]) -
+                      H[0][1] * (H[1][0] * H[2][2] - H[1][2] * H[2][0]) +
+                      H[0][2] * (H[1][0] * H[2][1] - H[1][1] * H[2][0]);
+
+
+
+        // Proteção contra divisão por zero (matriz singular = Lidar não encontrou casamento geométrico)
+        if (fabsf(det_H) < 1e-6f) {
+            //Serial.println("FUCK YOU I GIVE UP");
+            return false; 
+        }
+
+        // Determinantes auxiliares corrigidos para isolar dx, dy, dtheta
+        float det_dx = sigma[0] * (H[1][1] * H[2][2] - H[1][2] * H[2][1]) -
+               H[0][1]  * (sigma[1] * H[2][2] - H[1][2] * sigma[2]) +
+               H[0][2]  * (sigma[1] * H[2][1] - H[1][1] * sigma[2]);
+
+        float det_dy = H[0][0] * (sigma[1] * H[2][2] - H[1][2] * sigma[2]) -
+               sigma[0] * (H[1][0] * H[2][2] - H[1][2] * H[2][0]) +
+               H[0][2]  * (H[1][0] * sigma[2] - sigma[1] * H[2][0]);
+
+        // CORRIGIDO: Agora seguindo estritamente a submatriz da terceira coluna
+        float det_dt = H[0][0] * (H[1][1] * sigma[2] - sigma[1] * H[2][1]) -
+               H[0][1] * (H[1][0] * sigma[2] - sigma[1] * H[2][0]) +
+               sigma[0] * (H[1][0] * H[2][1] - H[1][1] * H[2][0]);
+        // Calcula o ajuste fino da pose
+        float delta_x     = det_dx / det_H;
+        float delta_y     = det_dy / det_H;
+        float delta_theta = det_dt / det_H;
+
+        //Serial.printf("dx: %7.2f | dy: %7.2f | dt: %7.2f\n\r", delta_x, delta_y, delta_theta);
+        float correction_factor = 0.8f;
+        // Atualiza a pose de busca
+        robot->position.x += delta_x * CHUNK_PRECISION * correction_factor;
+        robot->position.y += delta_y * CHUNK_PRECISION * correction_factor;
+        robot->position.heading += delta_theta * correction_factor;
+
+        // Critério de parada precoce se a correção for irrelevante (convergência)
+        if (fabsf(delta_x) < CHUNK_CONVERGE_LIMIT && 
+            fabsf(delta_y) < CHUNK_CONVERGE_LIMIT && 
+            fabsf(delta_theta) < CHUNK_CONVERGE_LIMIT) {
+            break;
+        }
     }
 
-    if(start_id < 0){return;}   // Gets out if theres no valid chunk with this coordinate, for some reason
+    // Normaliza o ângulo final entre -PI e PI
+    robot->position.heading = atan2f(sinf(robot->position.heading), cosf(robot->position.heading));
 
-    // Get chunk local coordinates
-    vector_t start_pos = globalToChunkLocalCoordinates(robot.position.x, robot.position.y);     // TEST DEBUG - OK
+    return true;
+}
 
-    for(int i = 0; i < sample->num_samples; i++){
-        if(sample->data[sample->num_samples + i] > CHUNK_SIZE * CHUNK_PRECISION / 20){continue;}    // Limits samples to only within loaded chunks, theoretically
+void updateMap(lidar_packet* lidar, robot_kinematic robot){
+
+    float sin_theta = sinf(robot.position.heading);
+    float cos_theta = cosf(robot.position.heading);
+
+    float robot_x = robot.position.x * (1.f/CHUNK_PRECISION);
+    float robot_y = robot.position.y * (1.f/CHUNK_PRECISION);
+
+    for(int i = 0; i < lidar->num_samples; i++){
+        float sample_x = lidar->distance(i) * cosf(lidar->angle(i)); // In local lidar coordinates
+        float sample_y = lidar->distance(i) * sinf(lidar->angle(i)); // In local lidar coordinates
+
+        float world_x = (cos_theta * sample_x) - (sin_theta * sample_y) + robot.position.x;
+        float world_y = (sin_theta * sample_x) + (cos_theta * sample_y) + robot.position.y;
+
+        int32_t grid_x = (int32_t) (world_x * (1.f/CHUNK_PRECISION));   // Convert points from cm to chunk
+        int32_t grid_y = (int32_t) (world_y * (1.f/CHUNK_PRECISION));   // Convert points from cm to chunk units
+
+        uint16_t num_steps = (uint16_t) roundf(lidar->distance(i) * (1.f/CHUNK_PRECISION));
+        if(num_steps == 0){continue;}
+        // ---------- From now on, everything below is in UNITS, **NOT** cm ----------
+
+        float dx = (grid_x - robot_x) / (float) num_steps;
+        float dy = (grid_y - robot_y) / (float) num_steps;
+
+        float x = robot_x;
+        float y = robot_y;
+
+        if(xSemaphoreTake(chunk_mutex, 5) == pdTRUE){
+            for(int step = 0; step < num_steps; step++){
+                addGridValue(x, y, -1);
+                x += dx;
+                y += dy;
+
+            }  
+            addGridValue(x, y, 2);
+            xSemaphoreGive(chunk_mutex);
+
+        } 
         
-        const float step_size = ((CHUNK_PRECISION)/10.f);       
-
-        uint16_t num_steps = (uint16_t)(sample->data[sample->num_samples + i] / step_size);         // Get total steps
-
-        float sample_angle = robot.position.heading + sample->data[i];   // Get sample angle
-
-        float step_x = cos(sample_angle) * step_size / (CHUNK_PRECISION/10);         // Get step size in x direction
-        float step_y = sin(sample_angle) * step_size / (CHUNK_PRECISION/10);         // Get step size in y direction
-
-        // Set the start position
-        float pos_x = start_pos.x;
-        float pos_y = start_pos.y;  
-
-        vector_t act_chunk_pos = chunk_pos; // Set the inicial chunk_pos
-        int act_id = start_id;          // Set the start chunk id
-
-        // Iterate on the steps
-        for(int step = 0; step < num_steps; step++){
-            const int32_t x_index = (int32_t)pos_x;
-            const int32_t y_index = (int32_t)pos_y;
-            uint16_t address = 0;
-            int16_t value = 127;
-
-            if(x_index >= 0 && x_index < CHUNK_SIZE && y_index >= 0 && y_index < CHUNK_SIZE){
-                address = (uint16_t)y_index * CHUNK_SIZE + (uint16_t)x_index;
-            } else {continue;}
-
-            if(act_id >= 0 && act_id < 4 && xSemaphoreTake(chunk_mutex, 5) == pdTRUE){
-                chunk_t* current_chunk = active_chunks[act_id];
-                if(current_chunk != nullptr && current_chunk->data != nullptr && address < CHUNK_SIZE * CHUNK_SIZE){
-                    value = current_chunk->data[address];
-                }
-                xSemaphoreGive(chunk_mutex);
-            }
-
-            value = step < (num_steps-1) ? --value : ++value;   // Remove 1 from the samples (except the last one)
-            value = constrain(value, 0, 255);
-
-            if(act_id >= 0 && act_id < 4 && xSemaphoreTake(chunk_mutex, 5) == pdTRUE){
-                chunk_t* current_chunk = active_chunks[act_id];
-                if(current_chunk != nullptr && current_chunk->data != nullptr && address < CHUNK_SIZE * CHUNK_SIZE){
-                    current_chunk->data[address] = (uint8_t)value;
-                }
-                xSemaphoreGive(chunk_mutex);
-            }
-
-            // Iterate to next step
-            pos_x += step_x;
-            pos_y += step_y;
-
-            // Check if has crossed chunk boundary
-            bool update_chunk = false;
-            if(pos_x >= CHUNK_SIZE)  {pos_x = 0;             update_chunk = true; act_chunk_pos.x++;}
-            else if(pos_x < 0)      {pos_x = CHUNK_SIZE-1;  update_chunk = true; act_chunk_pos.x--;}
-            if(pos_y >= CHUNK_SIZE)  {pos_y = 0;             update_chunk = true; act_chunk_pos.y++;}
-            else if(pos_y < 0)      {pos_y = CHUNK_SIZE-1;  update_chunk = true; act_chunk_pos.y--;}
-
-            if(update_chunk){
-                bool found_chunk = false;
-                if(xSemaphoreTake(chunk_mutex, 5) == pdTRUE){
-                    for(int i = 0; i < 4; i++){
-                        if(active_chunks[i] != nullptr &&
-                           active_chunks[i]->x == act_chunk_pos.x &&
-                           active_chunks[i]->y == act_chunk_pos.y){
-                            act_id = i;
-                            found_chunk = true;
-                            break;
-                        }
-                    }
-                    xSemaphoreGive(chunk_mutex);
-                    if(!found_chunk){
-                        //print_log("Not chunk found - Expectative: " + String( act_chunk_pos.x) + " | " + String(act_chunk_pos.y));
-                        break;
-                    }
-                    
-                }
-            }
-        }
-
     }
-
 }
 
-
-
-chunk_t* generateChunk(int16_t x, int16_t y, uint16_t size, uint16_t precision){
-    uint32_t total_size = sizeof(chunk_t) + (sizeof(uint8_t) * size * size);
-    
-    chunk_t* c = (chunk_t*) ps_malloc(total_size);
-
-    // PROTEÇÃO ABSOLUTA: Se o ESP32 estiver sem RAM, evita o crash
-    if (c == nullptr) {
-        print_error("Failure during chunk allocation");
-        return nullptr; 
-    }
-    
-    c->x = x;
-    c->y = y;
-    c->size = size;
-    c->precision = precision;
-    c->map_id = 0;      
-
-    // Limpa os valores de forma segura
-    for(int i = 0; i < size * size; i++){
-        c->data[i] = 127; 
-    }
-
-    return c; // Retorna o ponteiro correto e funcional
-}
-
-void deleteChunk(chunk_t* c){
-    if(c == nullptr){return;}
-    c->size = 0;
-    c->precision = 0;
-    free(c);
-}
 
 void chunk_task(void* param){
     // First allocation
     inactive_chunk = nullptr;
 
     // Generate inicial chunks, for now
-    // TODO: Read from SD card first of all
+    // TODO: Read from Flash first of all
 
-    if(xSemaphoreTake(chunk_mutex, 5) == pdTRUE){
+    if(xSemaphoreTake(chunk_mutex, 50) == pdTRUE){
         active_chunks[0] = generateChunk(0, 0, CHUNK_SIZE, CHUNK_PRECISION);
         active_chunks[1] = generateChunk(0, -1, CHUNK_SIZE, CHUNK_PRECISION);
         active_chunks[2] = generateChunk(-1, 0, CHUNK_SIZE, CHUNK_PRECISION);
@@ -176,8 +215,9 @@ void chunk_task(void* param){
         xSemaphoreGive(chunk_mutex);
     }
 
+    bool chunk_malloc_failed = active_chunks[0] == nullptr || active_chunks[1] == nullptr || active_chunks[2] == nullptr || active_chunks[3] == nullptr;
 
-    if(active_chunks[0] == nullptr || active_chunks[1] == nullptr || active_chunks[2] == nullptr || active_chunks[3] == nullptr){
+    if(chunk_malloc_failed){
         print_error("Chunk Allocation Failed.");
     } else {
         print_log("Chunk allocation OK.");
@@ -187,13 +227,53 @@ void chunk_task(void* param){
     subscribe_lidar(&lidar_available);
     lidar_packet* lidar_data = (lidar_packet*) malloc(sizeof(lidar_packet) + 40 * sizeof(float) * 2); 
 
+    if(chunk_malloc_failed || lidar_data == nullptr){
+        print_log("Chunk init Failed.");
+    } else {
+        print_log("Chunk init OK.");
+    }
+    
+
+    // Create initial map without localization
+    while(millis() < 10000){
+        if(lidar_available){
+            lidar_info info = getLidarInfo();
+            if(info.type == LIDAR_NORMAL){  
+                getLidarData(lidar_data);
+                robot_kinematic robot = getKinematics();
+                updateMap(lidar_data, robot);
+             }
+            lidar_available = false;
+        }
+        vTaskDelay(CHUNK_DELAY);
+    }
 
     while(true){
         if(lidar_available){
             lidar_info info = getLidarInfo();
-            if(info.type == LIDAR_NORMAL){
+            if(info.type == LIDAR_NORMAL){  
+                uint64_t start = millis();
                 getLidarData(lidar_data);
-                parseLidar(lidar_data);
+                robot_kinematic robot = getKinematics();
+                robot_kinematic new_robot = robot;
+                if(doSlam(lidar_data, &new_robot) && 0){
+                    float delta_x = (new_robot.position.x - robot.position.x);
+                    float delta_y = (new_robot.position.y - robot.position.y);
+                    float var = sqrtf(delta_x * delta_x + delta_y * delta_y);
+                    
+                    if(var > 3.f && var < 6.f){
+                        float delta_h = new_robot.position.heading - robot.position.heading;
+                        float delta_heading = atan2(sin(delta_h), cos(delta_h)) * (abs(robot.velocity.angular * 2) > 2.f ? 0.01f : 0.9f);
+                        setPositionCorrection(delta_x * 0.04f, delta_y * 0.04f, delta_heading * 0.002f);
+                    } else if(var > 1.f && var < 3.f){
+                        setPositionCorrection(delta_x * 0.05f, delta_y * 0.05f, 0);
+                    }
+                       
+                    uint64_t end = millis();
+                    //Serial.printf("Parse Time: %d ms - X: %8.2f Y: %8.2f H: %8.2f\n\r", end-start, robot.position.x, robot.position.y, robot.position.heading * RAD_TO_DEG);
+                    
+                }
+                updateMap(lidar_data, robot);
             }
             lidar_available = false;
         }
@@ -201,3 +281,4 @@ void chunk_task(void* param){
         vTaskDelay(CHUNK_DELAY);
     }
 }
+

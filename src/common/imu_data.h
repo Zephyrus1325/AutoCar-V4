@@ -3,9 +3,9 @@
 
 typedef struct {
     struct {
-        float x;    // in cm/s² ???
-        float y;    // in cm/s² ???
-        float z;    // in cm/s² ???
+        float x;    // in gs
+        float y;    // in gs
+        float z;    // in gs
     } accel;
 
     struct {

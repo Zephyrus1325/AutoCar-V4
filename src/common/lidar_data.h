@@ -14,6 +14,9 @@ typedef struct {
     uint16_t type;      // Making my life easier, again
     uint16_t num_samples;
     float data[];       // Angles in rad | Distances in cm
+    
+    float angle(uint16_t index){return data[index];}
+    float distance(uint16_t index){return data[index + num_samples];}
 } __attribute__((packed)) lidar_packet;
 
 typedef struct {

@@ -53,6 +53,8 @@ void motor_task(void* param){
 
     motor_data temp;
 
+    print_log("Motor init OK.");
+
     while(true){
         // Update motors PIDs
         left_motor.update();
@@ -88,7 +90,7 @@ void motor_task(void* param){
             data = temp;
             xSemaphoreGive(motor_mutex);
         }
-        
+
         vTaskDelay(MOTOR_DELAY);
     }
 }

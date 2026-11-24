@@ -18,11 +18,11 @@
 #include "common/robot_kinematics.h" // To get robot position and speed data
 
 #include "navigation/chunks/chunk.h"
-
+#include "common/navigation.h"
 
 AsyncWebServer server(NETWORK_SERVER_PORT);
 AsyncWebSocket ws("/ws");
-
+bool walk = false;
 TaskHandle_t telemetry_handler;
 lidar_packet* lidar_data;   // Packet used to send lidar data
 
@@ -34,13 +34,13 @@ struct __attribute__((packed)) ChunkHeader {
     uint16_t part;  // 2 bytes (tamanho dos dados que vêm atrás)
 };
 
-void sendChunkData(uint8_t id, uint8_t part, uint8_t* buffer){
-    if (buffer == nullptr) return;
-    if (id >= 4) return;
-    if (part >= 16) return;
+bool sendChunkData(uint8_t id, uint8_t part, uint8_t* buffer){
+    if (buffer == nullptr) return false;
+    if (id >= 4) return false;
+    if (part >= 16) return false;
 
     // 1. Tenta pegar o mutex de forma única. Aguarda até 5ms se estiver ocupado.
-    if (xSemaphoreTake(chunk_mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+    if (xSemaphoreTake(chunk_mutex, pdMS_TO_TICKS(6)) == pdTRUE) {
         
         // --- SEÇÃO CRÍTICA PROTEGIDA ---
         // Se qualquer validação falhar, precisamos garantir que o mutex seja liberado!
@@ -49,7 +49,7 @@ void sendChunkData(uint8_t id, uint8_t part, uint8_t* buffer){
             active_chunks[id]->data == nullptr) {
             
             xSemaphoreGive(chunk_mutex); // Libera o Mutex antes de sair!
-            return;
+            return false;
         }
 
         const uint32_t total_map_size = CHUNK_SIZE * CHUNK_SIZE;
@@ -72,7 +72,7 @@ void sendChunkData(uint8_t id, uint8_t part, uint8_t* buffer){
             memcpy(buffer + sizeof(ChunkHeader), &active_chunks[id]->data[part_index], slice_size);
         }
 
-        // 计算 Pacote Completo
+        // Pacote Completo
         const uint32_t data_size = sizeof(ChunkHeader) + slice_size;
 
         // --- FIM DA SEÇÃO CRÍTICA ---
@@ -82,11 +82,11 @@ void sendChunkData(uint8_t id, uint8_t part, uint8_t* buffer){
         // você pode transmitir via rede sem prender o resto do robô.
         ws.binaryAll(buffer, data_size);
         yield();
-        
+        return true;
     } else {
         // Se o mutex estava ocupado com a Task de geração do mapa,
         // apenas pula esse envio para não travar o FreeRTOS.
-        return; 
+        return false; 
     }
 }
 
@@ -151,7 +151,7 @@ void sendLidarData(){
     ws.binaryAll((const char*) lidar_data, sizeof(lidar_packet) + sizeof(float) * len * 2);
 }
 
-void handleWebSocketMessage(AsyncWebSocketClient *client, void *arg, uint8_t *data, size_t len) {
+void handleWebSocketMessage(AsyncWebSocketClient* client, void* arg, uint8_t* data, size_t len) {
     AwsFrameInfo *info = (AwsFrameInfo*)arg;
 
     if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT) {
@@ -176,23 +176,31 @@ void handleWebSocketMessage(AsyncWebSocketClient *client, void *arg, uint8_t *da
         } else if (json["type"] == "cmd_vel") {
             float velocidadeEsquerda = json["left"];
             float velocidadeDireita = json["right"];
-
             // Aplica diretamente o Setpoint que o seu loop de PID vai ler no próximo update()
-            setMotorSpeed(velocidadeEsquerda, velocidadeDireita);
+            if(!getNavigating()){
+                setMotorSpeed(velocidadeEsquerda, velocidadeDireita);
+            }
+        } else if (json["type"] == "cmd_destination") {
+            float dest_x = json["x"];
+            float dest_y = json["y"];
+            setDestination(dest_x, dest_y);
         }
     }
 
     
 }
 
-void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len) {
+void onEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsEventType type, void* arg, uint8_t* data, size_t len) {
   switch (type) {
     case WS_EVT_CONNECT:
         print_log("Client connected from " + client->remoteIP().toString());
         break;
     case WS_EVT_DISCONNECT:
         print_alert("Client Disconnected.");
-        setMotorSpeed(0, 0);
+        if(!getNavigating()){
+            setMotorSpeed(0, 0);
+        }
+        
         break;
     case WS_EVT_DATA:
         handleWebSocketMessage(client, arg, data, len);
@@ -222,6 +230,9 @@ void startServer(){
         request->send(LittleFS, "/index.html", "text/html");
     });
     server.serveStatic("/", LittleFS, "/");
+    
+    server.serveStatic("/js/", LittleFS, "/js/");
+    server.serveStatic("/css/", LittleFS, "/css/");
 
     ws.onEvent(onEvent);
     server.addHandler(&ws);
@@ -231,13 +242,13 @@ void startServer(){
 
 void telemetry_task(void *args){
     uint64_t last_motor = 0; 
-    uint64_t motor_wait = 27;
+    uint64_t motor_wait = 57;
 
     uint64_t last_chunk = 0;
-    uint64_t chunk_wait = 49;
+    uint64_t chunk_wait = 34;
 
     uint64_t last_lidar = 0;
-    uint64_t lidar_wait = 102;
+    uint64_t lidar_wait = 55;
     uint8_t lidar_id = 0;
 
     bool lidar_available = false;
@@ -251,6 +262,9 @@ void telemetry_task(void *args){
     uint8_t* chunk_buffer = (uint8_t*) malloc(data_size);
 
     while(true){
+
+        ws.cleanupClients();
+        
         if(ws.count() > 0){
             if(millis() - last_motor > motor_wait){
                 sendMotorData();
@@ -267,21 +281,23 @@ void telemetry_task(void *args){
                 if(lidar_id > 16){last_lidar = millis(); lidar_id = 0;}
             }   
 
-            if(millis() - last_chunk > chunk_wait){
-                sendChunkData(chunk_id, chunk_part++, chunk_buffer);
-                if(chunk_part >= 16){
-                    chunk_part = 0;
-                    chunk_id++;
-                    chunk_id = chunk_id > 4 ? 0 : chunk_id;
-                }
-                
-                last_chunk = millis();
-            }
+            //if(millis() - last_chunk > chunk_wait){
+            //    if(sendChunkData(chunk_id, chunk_part, chunk_buffer)){
+            //        chunk_part++;
+            //        if(chunk_part >= 16){
+            //            chunk_part = 0;
+            //            chunk_id++;
+            //            chunk_id = chunk_id >= 4 ? 0 : chunk_id;
+            //        }
+            //        last_chunk = millis();
+            //    }
+            //    
+            //}
             
             delay(NETWORK_DELAY);
             //yield();
         } else {
-            delay(1000);
+            delay(100);
         }
     }
 }

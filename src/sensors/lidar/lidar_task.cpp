@@ -6,6 +6,7 @@
 
 #include "Lidar.h"
 #include "common/lidar_data.h"
+#include "common/robot_kinematics.h"
 
 SemaphoreHandle_t lidar_mutex;
 SemaphoreHandle_t info_mutex;
@@ -65,13 +66,14 @@ void lidar_task(void* param){
             if(reading.length() > 0){
                 // fill with new data
                 temp->num_samples = reading.length();
+                robot_kinematic robot = getKinematics();
 
                 float initial_angle = reading.initialAngle();
                 
                 // Note: for now just repeating same data
                 // TODO: Later on add unskewing for the data
                 for(int i = 0; i < temp->num_samples; i++){
-                    temp->data[i] = (TWO_PI + HALF_PI) - ((initial_angle + i * (22.5f / temp->num_samples)) * DEG_TO_RAD);
+                    temp->data[i] = ((270.f - (initial_angle + i * (22.5f / temp->num_samples))) * DEG_TO_RAD) + robot.velocity.angular/3.f;
                 }
                 for(int i = 0; i < temp->num_samples; i++){
                     temp->data[i + temp->num_samples] = reading.distance(i);

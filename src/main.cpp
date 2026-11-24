@@ -9,6 +9,8 @@
 #include "navigation/kinematics/kinematics_task.h"
 #include "sensors/IMU/imu_task.h"
 #include "navigation/motors/motor_task.h"
+#include "navigation/navigation/navigation_task.h"
+#include "sensors/health/health_task.h"
 
 #include "util/file_read.h"
 #include "util/logger.h"
@@ -18,6 +20,7 @@ extern SemaphoreHandle_t info_mutex;
 extern SemaphoreHandle_t imu_mutex;
 extern SemaphoreHandle_t motor_mutex;
 extern SemaphoreHandle_t kinematics_mutex;
+extern SemaphoreHandle_t navigation_mutex;
 
 void setup() {
     Serial.begin(115200);   // Starts Serial console for ease of debug
@@ -29,6 +32,7 @@ void setup() {
     motor_mutex = xSemaphoreCreateMutex();
     kinematics_mutex = xSemaphoreCreateMutex();
     chunk_mutex = xSemaphoreCreateMutex();
+    navigation_mutex = xSemaphoreCreateMutex();
 
     if(!psramFound()){
         print_error("PSRAM not available for some reason - Check your wiring.");
@@ -55,6 +59,8 @@ void setup() {
     xTaskCreatePinnedToCore(imu_task, "IMU Task", IMU_STACK_SIZE, NULL, IMU_PRIORITY, &imu_task_handler, IMU_CORE);
     xTaskCreatePinnedToCore(motor_task, "Motor Task", MOTOR_STACK_SIZE, NULL, MOTOR_PRIORITY, &motor_task_handler, MOTOR_CORE);
     xTaskCreatePinnedToCore(kinematics_task, "Kinematics Task", KINEMATICS_STACK_SIZE, NULL, KINEMATICS_PRIORITY, &kinematics_task_handler, KINEMATICS_CORE);
+    xTaskCreatePinnedToCore(navigation_task, "Navigation Task", NAVIGATION_STACK_SIZE, NULL, NAVIGATION_PRIORITY, &navigation_task_handler, NAVIGATION_CORE);
+    xTaskCreatePinnedToCore(health_task, "Health Task", HEALTH_STACK_SIZE, NULL, HEALTH_PRIORITY, &health_task_handler, HEALTH_CORE);
 }
 
 void loop() {

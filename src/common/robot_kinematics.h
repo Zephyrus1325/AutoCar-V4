@@ -17,5 +17,6 @@ typedef struct {
 } robot_kinematic;
 
 robot_kinematic getKinematics();
-
+void setPositionCorrection(float delta_x, float delta_y, float delta_heading);
+void setPosition(float x, float y, float heading);
 #endif // KINEMATICS_H

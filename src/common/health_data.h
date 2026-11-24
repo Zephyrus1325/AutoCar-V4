@@ -1,0 +1,24 @@
+#ifndef HEALTH_DATA_H
+#define HEALTH_DATA_H
+
+typedef enum {
+    NO_LIDAR_ROTATION,
+    NO_LIDAR_PACKET,
+    UNSTABLE_LIDAR_RPM,
+    CORRUPTED_LIDAR_PACKETS,
+    IMU_NOT_FOUND,
+    MOTOR_NO_ROTATION,
+    MOTOR_SLIPPING,
+    ALERT_BATTERY_VOLTAGE,
+    LOW_BATTERY_VOLTAGE,
+    CRITICAL_BATTERY_VOLTAGE,
+    ROBOT_FLIPPED,
+} health_types_t;
+
+
+typedef struct{
+
+} general_health_t;
+
+
+#endif  // HEALTH_DATA_H
